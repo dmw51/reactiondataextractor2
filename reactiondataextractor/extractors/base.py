@@ -35,6 +35,5 @@ class BaseExtractor:
         pass
 
     @property
-    @abstractmethod
     def img(self):
         return self.fig.img

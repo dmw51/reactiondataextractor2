@@ -19,9 +19,8 @@ from scipy.ndimage import label, binary_closing, binary_dilation
 # from skimage.measure import regionprops
 # from skimage.morphology import disk, skeletonize as skeletonize_skimage
 # from skimage.transform import probabilistic_hough_line
-from .geometry import Line, Point, OpencvToSkimageHoughLineAdapter
-from .segments import Rect, Panel, Figure, FigureRoleEnum
-
+from reactiondataextractor.models.geometry import Line, Point, OpencvToSkimageHoughLineAdapter
+from reactiondataextractor.models.segments import Rect, Panel, Figure, FigureRoleEnum
 
 
 
@@ -231,16 +230,16 @@ def erase_elements(fig, elements):
     return new_fig
 
 
-# def dilate_fragments(fig, kernel_size):
-#     """
-#     Applies binary dilation to `fig.img` using a disk-shaped structuring element of size ''kernel_sizes''.
-#     :param Figure fig: Processed figure
-#     :param int kernel_size: size of the structuring element
-#     :return Figure: new Figure object
-#     """
-#     selem = disk(kernel_size)
-#
-#     return Figure(binary_dilation(fig.img, selem), raw_img=fig.raw_img)
+def dilate_fig(fig, kernel_size):
+    """
+    Applies binary dilation to `fig.img` using a disk-shaped structuring element of size ''kernel_sizes''.
+    :param Figure fig: Processed figure
+    :param int kernel_size: size of the structuring element
+    :return Figure: new Figure object
+    """
+    # selem = disk(kernel_size)
+    return Figure(cv2.dilate(fig.img, None, iterations=kernel_size))
+    # return Figure(binary_dilation(fig.img, selem), raw_img=fig.raw_img)
 
 
 def is_slope_consistent(lines):
@@ -507,3 +506,9 @@ def mark_tiny_ccs(fig):
     :param Figure fig: Analysed figure"""
     [setattr(cc, 'role', FigureRoleEnum.TINY) for cc in fig.connected_components if
      cc.area < np.percentile([cc.area for cc in fig.connected_components], 4) and cc.role is None]
+
+
+def set_roles(fig, panels, role):
+    for panel in panels:
+        parent_cc = [cc for cc in fig.connected_components if cc == panel][0]
+        parent_cc.role = role

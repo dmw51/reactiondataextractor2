@@ -92,8 +92,16 @@ class ReactionRoleEnum(Enum):
 class PanelMethodsMixin:
     """If an attribute is not found in the usual places, try to look it up inside ``panel`` attribute. Used for
     backward compatibility"""
-    def __getattr__(self, item):
-        return self.panel.__getattribute__(item)
+    # def __getattr__(self, item):
+    #     return super().panel.__getattr__(item)
+    #     # self.panel.(item)
+    #     # if attr:
+    #     #     return attr
+
+    @property
+    def center(self):
+        return self.panel.center
+
 
 
 class Rect(object):
@@ -216,14 +224,15 @@ class Rect(object):
         else:
             return False
 
+    ## The schema was changed from (left, right, top bottom) to (top, left, bottom, right) below to standardize
     def __call__(self):
-        return self.left, self.right, self.top, self.bottom
+        return self.top, self.left, self.bottom, self.right
 
     def __iter__(self):
-        return iter([self.left, self.right, self.top, self.bottom])
+        return iter([self.top, self.left, self.bottom, self.right])
 
     def __hash__(self):
-        return hash((self.left, self.right, self.top, self.bottom))
+        return hash((self.top, self.left, self.bottom, self.right))
 
     def to_json(self):
         return f"[{', '.join(map(str, self()))}]"
@@ -299,14 +308,14 @@ class Rect(object):
         :rtype: Crop"""
         return Crop(figure, self)
 
-    # def create_padded_crop(self, figure, pad_width=(10, 10), pad_val=0):
-    #     """Creates a crop from the rectangle in figure and pads it
-    #     :return: padded crop containing the rectangle
-    #     :rtype: Crop"""
-    #     crop = self.create_crop(figure)
-    #     img = pad(crop.img, pad_width=pad_width, constant_values=pad_val)
-    #     dummy_fig = Figure(img, img)
-    #     return Crop(dummy_fig, Rect(0, dummy_fig.width, 0, dummy_fig.height))
+    def create_padded_crop(self, figure, pad_width=(10, 10), pad_val=0):
+        """Creates a crop from the rectangle in figure and pads it
+        :return: padded crop containing the rectangle
+        :rtype: Crop"""
+        crop = self.create_crop(figure)
+        img = np.pad(crop.img, pad_width=pad_width, constant_values=pad_val)
+        dummy_fig = Figure(img, img)
+        return Crop(dummy_fig, Rect((0, 0, dummy_fig.height, dummy_fig.width)))
 
     def create_extended_crop(self, figure, extension):
         """Creates a crop from the rectangle and its surroundings in figure
@@ -316,6 +325,27 @@ class Rect(object):
         left, right = left - extension, right + extension
         top, bottom = top - extension, bottom + extension
         return Panel(left, right, top, bottom).create_crop(figure)
+
+    def compute_iou(self, other_rect):
+        xa, ya, wa, ha = self
+        xb, yb, wb, hb = other_rect
+        x1_inter = max(xa, xb)
+        y1_inter = max(ya, yb)
+        x2_inter = min(xa + wa, xb + wb)
+        y2_inter = min(ya + ha, yb + hb)
+
+        if x2_inter < x1_inter or y2_inter < y1_inter:
+            return 0.0
+
+        area_a = wa * ha
+        area_b = wb * hb
+
+        w_inter = x2_inter - x1_inter
+        h_inter = y2_inter - y1_inter
+
+        area_intersection = w_inter * h_inter
+        iou = area_intersection / (area_a + area_b - area_intersection)
+        return iou
 
 class Panel(Rect):
     """ Tagged section inside Figure
@@ -446,8 +476,12 @@ class Figure(object):
             ax.add_patch(rect_bbox)
         plt.show()
 
+    def resize(self, *args, **kwargs):
+        """Simple wrapper around opencv resize"""
+        return Figure(cv2.resize(self.img, *args, **kwargs), raw_img=self.raw_img)
 
-class Crop:
+
+class Crop(Figure):
     """Class used to represent crops of figures with links to the main figure and crop paratemeters, as well as
     connected components both in the main coordinate system and in-crop coordinate system
     :param main_figure: the parent figure
@@ -461,9 +495,10 @@ class Crop:
         self.cropped_rect = None  # Actual rectangle used for the crop - different if crop_params are out of fig bounds
         self.img = None
         self.raw_img = None
-        self.crop_main_figure()
+        self._crop_main_figure()
         self.connected_components = None
         self.get_connected_components()
+
 
     def __eq__(self, other):
         return self.main_figure == other.main_figure and self.crop_params == other.crop_params \
@@ -502,7 +537,7 @@ class Crop:
 
         new_left = cc.left - self.cropped_rect.left
         new_right = new_left + cc.width
-        new_obj = cc.__class__(left=new_left, right=new_right, top=new_top, bottom=new_bottom, fig=self.main_figure)
+        new_obj = cc.__class__((new_top, new_left, new_bottom, new_right), fig=self.main_figure)
         new_obj.role = cc.role
         return new_obj
 
@@ -523,7 +558,7 @@ class Crop:
 
         self.connected_components = transformed_ccs
 
-    def crop_main_figure(self):
+    def _crop_main_figure(self):
         """
         Crop img.
         Automatically limits the crop if bounds are outside the img.
@@ -547,9 +582,10 @@ class Crop:
         out_img = img[top: bottom, left: right]
         out_raw_img = raw_img[top:bottom, left:right]
 
-        self.cropped_rect = Rect(left, right, top, bottom)
-        self.img = out_img
-        self.raw_img = out_raw_img
+        self.cropped_rect = Rect((top, left, bottom, right))
+        # self.img = out_img
+        # self.raw_img = out_raw_img
+        super().__init__(out_img, out_raw_img)
 
 
 @coords_deco

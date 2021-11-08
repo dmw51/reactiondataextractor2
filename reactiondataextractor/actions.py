@@ -14,9 +14,9 @@
 #
 # from .models.segments import Panel, Figure, FigureRoleEnum
 # from .models.utils import Point, Line
-from models.utils import isolate_patches, skeletonize, HoughLinesP
+from reactiondataextractor.utils import isolate_patches, skeletonize, HoughLinesP
 # from . import settings
-import config
+from . import config
 #
 # log = logging.getLogger('extract.actions')
 #
@@ -31,7 +31,6 @@ import config
 # log.addHandler(ch)
 #
 # #TODO: change from skimage to opencv
-import cv2.ximgproc
 import numpy as np
 
 

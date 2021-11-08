@@ -1,11 +1,11 @@
 """
 Arrow segmentation test.
 """
-from actions import estimate_single_bond
-from models.arrows import SolidArrowExtractor, CurlyArrowExtractor
-from models.segments import Panel, Point
+from reactiondataextractor.actions import estimate_single_bond
+from reactiondataextractor.extractors.arrows import SolidArrowExtractor, CurlyArrowExtractor, ArrowExtractor
+from reactiondataextractor.models.segments import Panel, Point
 # from models.utils import imread
-from processors import ImageReader, EdgeExtractor
+from reactiondataextractor.processors import ImageReader, EdgeExtractor
 PATH_SOLID = 'test_images/rde_test.png'
 reader = ImageReader(PATH_SOLID, ImageReader.COLOR_MODE.GRAY)
 solid_fig = reader.process()
@@ -27,6 +27,8 @@ curly_fig = binarizer.process()
 
 curly_extractor = CurlyArrowExtractor(curly_fig)
 curly_arrows = curly_extractor.extract()
+total_arrow_extractor = ArrowExtractor(curly_fig)
+total_arrow_extractor.extract()
 
 def test_number_arrows():
     assert len(solid_arrows) == 2

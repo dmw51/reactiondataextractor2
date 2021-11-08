@@ -24,6 +24,9 @@ class Point:
     def __repr__(self):
         return self.__str__()   # to de-clutter more complex objects
 
+    def __iter__(self):
+        return iter([self.row, self.col])
+
     def separation(self, other):
         """
         Calculates distance between self and another point
