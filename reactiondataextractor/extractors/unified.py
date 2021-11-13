@@ -4,19 +4,24 @@ import copy
 import numpy as np
 
 
-from .base import BaseExtractor
+from .base import BaseExtractor, Candidate
+from .conditions import ConditionsExtractor
+# from .labels import LabelExtractor
 from ..config import ExtractorConfig
 from ..models.ml_models.unified_detection import RDEModel, RSchemeConfig
 from ..models.reaction import Diagram, Conditions, Label
-from ..models.segments import Panel, Rect, FigureRoleEnum, Crop
+from ..models.segments import Panel, Rect, FigureRoleEnum, Crop, PanelMethodsMixin
 from ..utils import skeletonize_area_ratio, dilate_fig
+
+
 
 
 class UnifiedExtractor(BaseExtractor):
 
-    def __init__(self, fig):
-        self.fig = fig
-        self.model = self.load_model(ExtractorConfig.UNIFIED_EXTR_MODEL_PATH)
+    def __init__(self, fig, all_arrows):
+        super().__init__(fig)
+        self.model = self.load_model(ExtractorConfig.UNIFIED_EXTR_MODEL_WT_PATH)
+        self.all_arrows = all_arrows
 
         self._class_dict = {
             1: Diagram,
@@ -28,27 +33,31 @@ class UnifiedExtractor(BaseExtractor):
     def load_model(self, weights_path):
         model_config = RSchemeConfig()
         model = RDEModel(training=False, config=model_config)
-        model(np.zeros(model_config.IMAGE_SHAPE), np.zeros((1, 15)))
+        primer_input = np.zeros(model_config.IMAGE_SHAPE)[np.newaxis, ...]
+        model([primer_input, np.zeros((1, 15))])
         model.load_weights(weights_path)
         return model
 
-    def extract(self, all_arrows):
-        boxes, classes, scores = self.model.predict(self.img)
+    def extract(self):
+        boxes, classes, scores = map(lambda x: x[0].numpy(), self.model.predict(self.img))
         out_diag_bboxes = [box for box, class_ in zip(boxes, classes) if self._class_dict[class_] == Diagram]
         diag_priors = [self.select_diag_prior(bbox) for bbox in out_diag_bboxes]
-        diag_priors = [Panel(diag) for diag in diag_priors]
-        diag_priors = self.filter_diag_false_positives(diag_priors, all_arrows)
-        diags = DiagramExtractor(diag_priors).extract()
-        conditions_labels = [box for box, class_ in zip(boxes, classes)
+        # diag_priors = [Panel(diag) for diag in diag_priors]
+        diag_priors = self.filter_diag_false_positives(diag_priors, self.all_arrows)
+        diags = DiagramExtractor(self.fig, diag_priors).extract()
+        conditions_labels = [TextRegionCandidate(box, class_) for box, class_ in zip(boxes, classes)
                              if self._class_dict[class_] in [Label, Conditions]]
-        conditions, labels = self.reclassify(conditions_labels, all_arrows, diags)
+        conditions, labels = self.reclassify(conditions_labels, self.all_arrows, diags)
 
         return diags, conditions, labels
 
 
     def select_diag_prior(self, bbox):
         bbox_crop = Crop(self.fig, bbox)
-        prior = max(bbox_crop.connected_components, key=lambda cc: cc.area)
+        try:
+            prior = max(bbox_crop.connected_components, key=lambda cc: cc.area)
+        except ValueError: # no connected components in the crop
+            return None
         return bbox_crop.in_main_fig(prior)
 
 
@@ -57,7 +66,8 @@ class UnifiedExtractor(BaseExtractor):
         as an arrow by the arrow extraction model, then it is removed from a list of potential diagrams"""
         filtered_diags = []
         for diag in diag_priors:
-            if all(diag.compute_iou(arrow) < ExtractorConfig.UNIFIED_DIAG_FP_IOU_THRESH for arrow in all_arrows):
+            is_diag = diag is not None
+            if is_diag and all(diag.compute_iou(arrow) < ExtractorConfig.UNIFIED_DIAG_FP_IOU_THRESH for arrow in all_arrows):
                 filtered_diags.append(diag)
 
         return filtered_diags
@@ -68,35 +78,51 @@ class UnifiedExtractor(BaseExtractor):
         """Attempts to reclassify label and conditions candidates based on proximity to arrows and diagrams.
         If a candidate is close to an arrow, then it is reclassified as a conditions region. Conversely, if it is close
         to a diagram, then it is classified as a label. Finally, if it is not within a given threshold distance, it is
-        instantiated based on the prior label given by the unified detection model."""
+        instantiated based on the prior label given by the unified detection model. Assigns the closest of these panels
+        as a parent panel"""
 
-        reclassified = []
+        conditions = []
+        labels = []
         for cand in candidates:
             closest_arrow = self._find_closest(cand, all_arrows)
             closest_diag = self._find_closest(cand, all_diags)
-            cand_class = self._adjust_class(cand,(closest_arrow, closest_diag))
-            reclassified.append(cand_class(**cand.pass_attributes))
+            cand_class = self._adjust_class(cand, (closest_arrow, closest_diag))
+            cand.parent_panel = cand.set_parent_panel([closest_diag, closest_arrow])
+            ## Try OCR on all of them, then postprocess accordingly and instantiate?
+            # reclassified.append(cand_class(**cand.pass_attributes()))
+            if cand_class == Conditions:
+                conditions.append(cand)
+            else:
+                labels.append(cand)
 
-        return self._separate_labels_conditions(reclassified)
+        conditions = ConditionsExtractor(conditions, fig=self.fig).extract()
+        # labels = LabelExtractor(labels, fig=self.fig).extract()
+
+
+
+        return conditions, labels
 
 
     def _adjust_class(self, obj, closest):
         seps = [obj.separation(cc) for cc in closest]
         if seps[0] < seps[1] and seps[0] < ExtractorConfig.UNIFIED_RECLASSIFY_DIST_THRESH_COEFF * np.sqrt(obj.area):
             class_ = Conditions
+
         elif seps[1] < seps[0] and seps[1] < ExtractorConfig.UNIFIED_RECLASSIFY_DIST_THRESH_COEFF * np.sqrt(obj.area):
             class_ = Label
+
         else:
-            class_ = self._class_dict[obj._class_]
+            class_ = self._class_dict[obj._prior_class]
+
 
         return class_
 
-    def _find_closest(self, panel, other_objects):
+    def _find_closest(self, obj, other_objects):
         """
         Measure the distance between 'panel' and 'other_objects' to find the object that is closest to the `panel`
         """
-
-        dists = [(o,panel.separation(o.panel)) for o in other_objects]
+        #TODO: This should be a method inside a `Panel` class (?)
+        dists = [(other_obj, obj.separation(other_obj)) for other_obj in other_objects]
         return sorted(dists, key=lambda elem: elem[1])[0][0]
 
     def _separate_labels_conditions(self, objects):
@@ -115,8 +141,12 @@ class DiagramExtractor(BaseExtractor):
         super().__init__(fig)
         self.diag_priors = diag_priors
 
+        self.fig.dilation_iterations = self._find_optimal_dilation_extent()
+        self.fig.set_roles(self.diag_priors, FigureRoleEnum.DIAGRAMPRIOR)
+
     def extract(self):
         diag_panels = self.complete_structures()
+        return diag_panels
 
     def complete_structures(self):
         """
@@ -130,9 +160,9 @@ class DiagramExtractor(BaseExtractor):
         """
         fig = self.fig
         # fig_no_arrows = erase_elements(fig, self.arrows)
-        dilated_structure_panels, other_ccs = self.find_dilated_structures(fig)
+        dilated_structure_panels, other_ccs = self.find_dilated_structures()
         structure_panels = self._complete_structures(dilated_structure_panels)
-        self._assign_backbone_auxiliaries(structure_panels, other_ccs)  # Assigns cc roles
+        self._assign_diagram_parts(structure_panels, other_ccs)  # Assigns cc roles
         temp = copy.deepcopy(structure_panels)
         # simple filtering to account for multiple backbone parts (disconnected by heteroatom characters)
         # corresponding to the same diagram
@@ -165,7 +195,7 @@ class DiagramExtractor(BaseExtractor):
         dilated_imgs = {}
 
         for diag in self.diag_priors:
-            ksize = fig.kernel_sizes[diag]
+            ksize = fig.dilation_iterations[diag]
             try:
                 dilated_temp = dilated_imgs[ksize] # use cached
             except KeyError:
@@ -184,7 +214,7 @@ class DiagramExtractor(BaseExtractor):
 
 
 
-    def _assign_backbone_auxiliaries(self, structure_panels, cno_ccs):
+    def _assign_diagram_parts(self, structure_panels, cno_ccs):
         """
         Assigns roles to small disconnected diagram parts.
 
@@ -203,9 +233,9 @@ class DiagramExtractor(BaseExtractor):
             for cc in fig.connected_components:
                 if parent_panel.contains(cc):  # Set the parent panel for all
                     setattr(cc, 'parent_panel', parent_panel)
-                    # if cc.role != FigureRoleEnum.STRUCTUREBACKBONE:
-                    #     # Set role for all except backbone which had been set
-                    setattr(cc, 'role', FigureRoleEnum.DIAGRAMPART)
+                    if cc.role != FigureRoleEnum.DIAGRAMPRIOR:
+                        # Set role for all except backbone which had been set
+                        setattr(cc, 'role', FigureRoleEnum.DIAGRAMPART)
 
         for cc in cno_ccs:
             # ``cno_ccs`` are dilated - find raw ccs in ``fig``
@@ -224,25 +254,27 @@ class DiagramExtractor(BaseExtractor):
         """
 
         structure_panels = []
+        disallowed_roles = [FigureRoleEnum.ARROW]
         for dilated_structure in dilated_structure_panels:
-            constituent_ccs = [cc for cc in self.fig.connected_components if dilated_structure.contains(cc)]
+            constituent_ccs = [cc for cc in self.fig.connected_components if dilated_structure.contains(cc)
+                               and cc.role not in disallowed_roles]
             parent_structure_panel = Panel.create_megarect(constituent_ccs)
             structure_panels.append(parent_structure_panel)
         return structure_panels
 
 
-    def _find_optimal_dilation_ksize(self):
+    def _find_optimal_dilation_extent(self):
             """
-            Use structural prio to calculate local skeletonised-pixel ratio and find optimal dilation kernel sizes for
-            structural segmentation. Each backbone is assigned its own dilation kernel to account for varying skel-pixel
-            ratio around different prio
-            :return: kernel sizes appropriate for each backbone
+            Use structural prior to calculate local skeletonised-pixel ratio and find optimal dilation kernel extent
+            (in terms of number of iterations) for structural segmentation. Each diagram priod is assigned its own
+            dilation extent to account for varying skel-pixel ratio around different priors
+            :return: number of dilation iterations appropriate for each diagram prior
             :rtype: dict
             """
 
             # prio = [cc for cc in self.fig.connected_components if cc.role == FigureRoleEnum.STRUCTUREBACKBONE]
 
-            kernel_sizes = {}
+            num_iterations = {}
             for prior in self.diag_priors:
                 top, left, bottom, right = prior
                 horz_ext, vert_ext = prior.width // 2, prior.height // 2
@@ -251,21 +283,27 @@ class DiagramExtractor(BaseExtractor):
                 # log.debug(f'found in-crop skel_pixel ratio: {p_ratio}')
 
                 if p_ratio >= 0.02:
-                    kernel_size = 4
+                    n_iterations = 2
                 elif 0.01 < p_ratio < 0.02:
-                    kernel_size = np.ceil(20 - 800 * p_ratio)
+                    n_iterations = np.ceil(16 - 800 * p_ratio)
                 else:
-                    kernel_size = 12
-                kernel_sizes[prior] = kernel_size
+                    n_iterations = 8
+                num_iterations[prior] = n_iterations
 
-class TextRegionCandidate:
+            return num_iterations
+
+class TextRegionCandidate(Candidate, PanelMethodsMixin):
     """This class is used to represent regions which consist of text and contain either labels or reaction conditions.
     This is determined at a later stage and attributes from each object are transferred to the new instances. In the
     pipeline, outputs marked by the unified model as conditions or labels are instantiated as objects of this class"""
 
-    def __init(self, bbox, class_):
+    def __init__(self, bbox, class_):
         self.panel = Panel(bbox)
-        self._class_ = class_
+        self._prior_class = class_
+        self.parent_panel = None
+
+    def set_parent_panel(self, nearby_panels):
+        return min(nearby_panels, key=lambda p: p.separation(self))
 
 
 

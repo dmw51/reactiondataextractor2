@@ -66,8 +66,8 @@ class FigureRoleEnum(Enum):
     CONDITIONSCHAR = 2
     SUPERATOMCHAR = 3
     LABELCHAR = 4
-    STRUCTUREBACKBONE = 5
-    STRUCTUREAUXILIARY = 6   # Either a solitary bond-line (e.g. double bond) ar a superatom label
+    DIAGRAMPRIOR = 5
+    DIAGRAMPART = 6   # Either a solitary bond-line (e.g. double bond) ar a superatom label
     BONDLINE = 7
     OTHER = 8
     TINY = 9   # Used for tiny ccs that have not been assigned (noise or small dots)
@@ -101,6 +101,34 @@ class PanelMethodsMixin:
     @property
     def center(self):
         return self.panel.center
+
+    @property
+    def left(self):
+        return self.panel.left
+
+    @property
+    def right(self):
+        return self.panel.right
+
+    @property
+    def top(self):
+        return self.panel.top
+
+    @property
+    def bottom(self):
+        return self.panel.bottom
+
+    @property
+    def area(self):
+        return self.panel.area
+
+    def separation(self, obj2):
+        return self.panel.separation(obj2)
+
+
+
+    def __iter__(self):
+        return iter(self.panel)
 
 
 
@@ -324,7 +352,7 @@ class Rect(object):
         left, right, top, bottom = self.__call__()
         left, right = left - extension, right + extension
         top, bottom = top - extension, bottom + extension
-        return Panel(left, right, top, bottom).create_crop(figure)
+        return Panel((top, left, bottom, right)).create_crop(figure)
 
     def compute_iou(self, other_rect):
         xa, ya, wa, ha = self
@@ -480,6 +508,11 @@ class Figure(object):
         """Simple wrapper around opencv resize"""
         return Figure(cv2.resize(self.img, *args, **kwargs), raw_img=self.raw_img)
 
+    def set_roles(self, panels, role):
+        for panel in panels:
+            parent_cc = [cc for cc in self.connected_components if cc == panel][0]
+            parent_cc.role = role
+
 
 class Crop(Figure):
     """Class used to represent crops of figures with links to the main figure and crop paratemeters, as well as
@@ -522,7 +555,7 @@ class Crop(Figure):
             new_bottom = new_top + element.height
             new_left = element.left + self.cropped_rect.left
             new_right = new_left + element.width
-            return element.__class__(left=new_left, right=new_right, top=new_top, bottom=new_bottom)
+            return element.__class__((new_top, new_left, new_bottom, new_right))
 
     def in_crop(self, cc):
         """
@@ -547,7 +580,7 @@ class Crop(Figure):
         components that fit fully within the crop are included.
         :return: None
         """
-        c_left, c_right, c_top, c_bottom = self.cropped_rect   # c is for 'crop'
+        c_top, c_left, c_bottom, c_right = self.cropped_rect   # c is for 'crop'
 
         transformed_ccs = [cc for cc in self.main_figure.connected_components
                            if cc.right <= c_right and cc.left >= c_left]
@@ -568,10 +601,10 @@ class Crop(Figure):
         img = self.main_figure.img
         raw_img = self.main_figure.raw_img
         if isinstance(self.crop_params, Collection):
-            left, right, top, bottom = self.crop_params
+            top, left, bottom, right = self.crop_params
         else:
             p = self.crop_params
-            left, right, top, bottom = p.left, p.right, p.top, p.bottom
+            top, left, bottom, right = p.top, p.left, p.bottom, p.right
 
         height, width = img.shape[:2]
 

@@ -165,8 +165,8 @@ class Conditions:
     """
     This class describes conditions region and associated text
 
-    :param text_lines: extracted text lines containing conditions
-    :type text_lines: list[TextLine]
+    :param panel: bounding box Panel of the detected conditions region
+    :type panel: Panel
     :param conditions_dct: dictionary with all parsed conditions
     :type conditions_dct: dict
     :param arrow: reaction arrow, around which the search for conditions is performed
@@ -175,16 +175,18 @@ class Conditions:
     :type structure_panels: list[Panel]
     """
 
-    def __init__(self, text_lines, conditions_dct, arrow, structure_panels=None):
-        self.arrow = arrow
-        self.text_lines = text_lines
+    def __init__(self, panel, conditions_dct, arrow, diags=None, *, _prior_class):
+        self.panel = panel
         self.conditions_dct = conditions_dct
+        self.arrow = arrow
+        # self.text_lines = text_lines
 
-        if structure_panels is None:
-            structure_panels = []
-        self._structure_panels = structure_panels
-        self.diags = None
-        self.text_lines.sort(key=lambda textline: textline.panel.top)
+        if diags is None:
+            diags = []
+        self.diags = diags
+        # self.diags = None
+        self._prior_class = _prior_class
+        # self.text_lines.sort(key=lambda textline: textline.panel.top)
 
     def __repr__(self):
         return f'Conditions({self.text_lines}, {self.conditions_dct}, {self.arrow})'
@@ -204,14 +206,10 @@ class Conditions:
     def __hash__(self):
         return hash(sum(hash(line) for line in self.text_lines))
 
-    @property
-    def structure_panels(self):
-        return self._structure_panels
-
-    @property
-    def anchor(self):
-        a_pixels = self.arrow.pixels
-        return a_pixels[len(a_pixels)//2]
+    # @property
+    # def anchor(self):
+    #     a_pixels = self.arrow.pixels
+    #     return a_pixels[len(a_pixels)//2]
 
     @property
     def coreactants(self):
@@ -257,7 +255,7 @@ class Label(PanelMethodsMixin):
         panel = Panel(left, right, top, bottom)
         return cls(panel, text)
 
-    def __init__(self, panel, text=None, r_group=None):
+    def __init__(self, panel, text=None, r_group=None, *, _prior_class=None):
         if r_group is None:
             r_group = []
         if text is None:
@@ -265,6 +263,7 @@ class Label(PanelMethodsMixin):
         self.panel = panel
         self._text = text
         self.r_group = r_group
+        self._prior_class = _prior_class
 
     @property
     def text(self):

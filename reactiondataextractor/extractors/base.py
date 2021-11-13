@@ -37,3 +37,12 @@ class BaseExtractor:
     @property
     def img(self):
         return self.fig.img
+
+
+class Candidate:
+    """Allows objects to behave like intermediate attribute storage that can pass their attributes when as final
+    object is instantiated"""
+
+    def pass_attributes(self):
+        """Returns all attributes in the form of a dictionary"""
+        return vars(self)

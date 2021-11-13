@@ -116,7 +116,7 @@ def crop(img, left=None, right=None, top=None, bottom=None):
     top = max(0, top if top else 0)
     bottom = min(height, bottom if bottom else width)
     out_img = img[top: bottom, left: right]
-    return {'img': out_img, 'rectangle': Rect(left, right, top, bottom)}
+    return {'img': out_img, 'rectangle': Rect((top, left, bottom, right))}
 
 
 def crop_rect(img, rect_boundary):
@@ -220,7 +220,7 @@ def erase_elements(fig, elements):
             temp_fig.img[element.top:element.bottom+1, element.left:element.right+1] = 0
 
     new_fig = Figure(temp_fig.img, fig.raw_img)
-    if hasattr(fig, 'kernel_sizes'):
+    if hasattr(fig, 'dilation_iterations'):
         new_fig.kernel_sizes = fig.kernel_sizes
     for cc1 in new_fig.connected_components:
         for cc2 in fig.connected_components:
@@ -232,13 +232,13 @@ def erase_elements(fig, elements):
 
 def dilate_fig(fig, kernel_size):
     """
-    Applies binary dilation to `fig.img` using a disk-shaped structuring element of size ''kernel_sizes''.
+    Applies binary dilation to `fig.img` using a disk-shaped structuring element of size ''dilation_iterations''.
     :param Figure fig: Processed figure
     :param int kernel_size: size of the structuring element
     :return Figure: new Figure object
     """
     # selem = disk(kernel_size)
-    return Figure(cv2.dilate(fig.img, None, iterations=kernel_size))
+    return Figure(cv2.dilate(fig.img, None, iterations=int(kernel_size)), raw_img=fig.raw_img)
     # return Figure(binary_dilation(fig.img, selem), raw_img=fig.raw_img)
 
 
@@ -508,7 +508,4 @@ def mark_tiny_ccs(fig):
      cc.area < np.percentile([cc.area for cc in fig.connected_components], 4) and cc.role is None]
 
 
-def set_roles(fig, panels, role):
-    for panel in panels:
-        parent_cc = [cc for cc in fig.connected_components if cc == panel][0]
-        parent_cc.role = role
+

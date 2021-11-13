@@ -20,16 +20,16 @@ from scipy.ndimage import label
 from tensorflow.keras.models import load_model
 
 from reactiondataextractor.config import ExtractorConfig
-from reactiondataextractor.extractors.base import BaseExtractor
+from reactiondataextractor.extractors.base import BaseExtractor, Candidate
 from reactiondataextractor.models.exceptions import NotAnArrowException
 from reactiondataextractor.models.segments import FigureRoleEnum, PanelMethodsMixin, Panel
-from reactiondataextractor.utils import skeletonize, is_a_single_line, set_roles
+from reactiondataextractor.utils import skeletonize, is_a_single_line
 from reactiondataextractor.models.geometry import Point, Line
 from reactiondataextractor.processors import Isolator
 
 log = logging.getLogger('arrows')
 
-CURRENT_DIR = os.path.dirname(os.path.realpath(__file__))
+
 
 
 class ArrowExtractorGeneric(BaseExtractor):
@@ -104,7 +104,7 @@ class ArrowExtractorGeneric(BaseExtractor):
         arrow_classes = np.argmax(arrow_classes, axis=1)
         # filtered_arrows = arrows[inliers]
         arrows = [self.instantiate_arrow(arrow, cls_idx) for arrow, cls_idx in zip(arrows, arrow_classes)]
-        set_roles(self.fig, [a.panel for a in arrows], FigureRoleEnum.ARROW)
+        self.fig.set_roles([a.panel for a in arrows], FigureRoleEnum.ARROW)
 
         return self.separate_arrows(arrows)
 
@@ -537,7 +537,7 @@ class EquilibriumArrow(BidirectionalArrow):
     pass
 
 
-class ArrowCandidate:
+class ArrowCandidate(Candidate):
     """A class to store any attributes that have been computed in the arrow proposal stage. Acts as a cache of values
     which can be reused when an arrow candidate is accepted. All instances are required to have a `pixels` attribute,
     which is used to isolate the relevant connected component prior to arrow detection stage"""
@@ -548,7 +548,5 @@ class ArrowCandidate:
         self.line = line
         self.contour = contour
 
-    def pass_attributes(self):
-        """Returns all attributes in the form of a dictionary"""
-        return vars(self)
+
 
