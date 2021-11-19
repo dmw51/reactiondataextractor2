@@ -2,11 +2,12 @@
 import copy
 
 import numpy as np
-
+from scipy.stats import mode
 
 from .base import BaseExtractor, Candidate
 from .conditions import ConditionsExtractor
 # from .labels import LabelExtractor
+from .labels import LabelExtractor
 from ..config import ExtractorConfig
 from ..models.ml_models.unified_detection import RDEModel, RSchemeConfig
 from ..models.reaction import Diagram, Conditions, Label
@@ -22,6 +23,7 @@ class UnifiedExtractor(BaseExtractor):
         super().__init__(fig)
         self.model = self.load_model(ExtractorConfig.UNIFIED_EXTR_MODEL_WT_PATH)
         self.all_arrows = all_arrows
+
 
         self._class_dict = {
             1: Diagram,
@@ -39,7 +41,7 @@ class UnifiedExtractor(BaseExtractor):
         return model
 
     def extract(self):
-        boxes, classes, scores = map(lambda x: x[0].numpy(), self.model.predict(self.img))
+        boxes, classes, scores = self.detect()
         out_diag_bboxes = [box for box, class_ in zip(boxes, classes) if self._class_dict[class_] == Diagram]
         diag_priors = [self.select_diag_prior(bbox) for bbox in out_diag_bboxes]
         # diag_priors = [Panel(diag) for diag in diag_priors]
@@ -47,9 +49,61 @@ class UnifiedExtractor(BaseExtractor):
         diags = DiagramExtractor(self.fig, diag_priors).extract()
         conditions_labels = [TextRegionCandidate(box, class_) for box, class_ in zip(boxes, classes)
                              if self._class_dict[class_] in [Label, Conditions]]
-        conditions, labels = self.reclassify(conditions_labels, self.all_arrows, diags)
-
+        adjusted_candidates = self.adjust_bboxes(conditions_labels)
+        conditions, labels = self.reclassify(adjusted_candidates, self.all_arrows, diags)
+        conditions, labels = [self.remove_duplicates(group) for group in [conditions, labels]]
+        conditions, labels = [self.extract_elements(group, extractor) for group, extractor
+                              in zip([conditions, labels], [ConditionsExtractor, LabelExtractor])]
         return diags, conditions, labels
+
+    def detect(self):
+        """A method used to perform any necessary preprocessing on an input before feeding it into the object detection model
+        and making predictions."""
+        if mode(self.fig.img.reshape(-1))[0][0] == 0:
+            img = np.invert(self.fig.img)
+        else:
+            img = self.fig.img
+        return map(lambda x: x[0].numpy(), self.model.predict(img))
+
+    def remove_duplicates(self, panels):
+        """Removes duplicate panels inside `group`. In this context, duplicates are all panels which cover the same
+        region, whether an entire region or just a part of it. In such cases, the biggest panel is selected.
+
+        The panels are first grouped into sets of overlapping objects and then removed on a group-by-group basis"""
+        dists = np.array([[p1.edge_separation(p2) for p1 in panels] for p2 in panels])
+        not_yet_grouped = set(list(range(len(panels))))
+        groups = []
+
+        idx1 = 0
+        while idx1 < len(panels) - 1:
+            if idx1 not in not_yet_grouped:
+                idx1 += 1
+                continue
+            group = [panels[idx1]]
+            not_yet_grouped.remove(idx1)
+            for idx2 in range(len(panels)):
+                if idx2 in not_yet_grouped and dists[idx1, idx2] == 0:
+                    group.append(panels[idx2])
+                    not_yet_grouped.remove(idx2)
+            groups.append(group)
+            idx1 += 1
+
+        filtered = []
+        for group in groups:
+            largest = max(group, key=lambda p: p.area)
+            filtered.append(largest)
+            for panel in group:
+                if not largest.contains(panel):
+                    filtered.append(panel)
+
+
+        return filtered
+
+    def extract_elements(self, elements, extractor):
+        return extractor(self.fig, elements).extract()
+
+
+
 
 
     def select_diag_prior(self, bbox):
@@ -74,6 +128,22 @@ class UnifiedExtractor(BaseExtractor):
 
 
 
+    def adjust_bboxes(self, region_candidates):
+        """Adjusts bboxes inside each of region_candidates by restricting them to cover connected components fully contained within crops bounded
+        by the bboxes"""
+
+        adjusted = []
+        for cand in region_candidates:
+            crop = cand.panel.create_extended_crop(self.fig, extension=20)
+            relevant_ccs = [crop.in_main_fig(cc) for cc in crop.connected_components]
+            relevant_ccs = [cc for cc in relevant_ccs if cc.role is None]  # Previously unassigned ccs
+            if relevant_ccs:
+                cand.panel = Panel.create_megarect(relevant_ccs)
+                adjusted.append(cand)
+        return adjusted
+
+
+
     def reclassify(self, candidates, all_arrows, all_diags):
         """Attempts to reclassify label and conditions candidates based on proximity to arrows and diagrams.
         If a candidate is close to an arrow, then it is reclassified as a conditions region. Conversely, if it is close
@@ -95,8 +165,7 @@ class UnifiedExtractor(BaseExtractor):
             else:
                 labels.append(cand)
 
-        conditions = ConditionsExtractor(conditions, fig=self.fig).extract()
-        # labels = LabelExtractor(labels, fig=self.fig).extract()
+
 
 
 
@@ -104,7 +173,7 @@ class UnifiedExtractor(BaseExtractor):
 
 
     def _adjust_class(self, obj, closest):
-        seps = [obj.separation(cc) for cc in closest]
+        seps = [obj.edge_separation(cc) for cc in closest]
         if seps[0] < seps[1] and seps[0] < ExtractorConfig.UNIFIED_RECLASSIFY_DIST_THRESH_COEFF * np.sqrt(obj.area):
             class_ = Conditions
 
@@ -122,7 +191,7 @@ class UnifiedExtractor(BaseExtractor):
         Measure the distance between 'panel' and 'other_objects' to find the object that is closest to the `panel`
         """
         #TODO: This should be a method inside a `Panel` class (?)
-        dists = [(other_obj, obj.separation(other_obj)) for other_obj in other_objects]
+        dists = [(other_obj, obj.edge_separation(other_obj)) for other_obj in other_objects]
         return sorted(dists, key=lambda elem: elem[1])[0][0]
 
     def _separate_labels_conditions(self, objects):
@@ -146,7 +215,7 @@ class DiagramExtractor(BaseExtractor):
 
     def extract(self):
         diag_panels = self.complete_structures()
-        return diag_panels
+        return [Diagram(panel=panel, crop=panel.create_crop(self.fig)) for panel in diag_panels]
 
     def complete_structures(self):
         """
@@ -283,9 +352,9 @@ class DiagramExtractor(BaseExtractor):
                 # log.debug(f'found in-crop skel_pixel ratio: {p_ratio}')
 
                 if p_ratio >= 0.02:
-                    n_iterations = 2
+                    n_iterations = 4
                 elif 0.01 < p_ratio < 0.02:
-                    n_iterations = np.ceil(16 - 800 * p_ratio)
+                    n_iterations = np.ceil(12 - 400 * p_ratio)
                 else:
                     n_iterations = 8
                 num_iterations[prior] = n_iterations
@@ -303,7 +372,7 @@ class TextRegionCandidate(Candidate, PanelMethodsMixin):
         self.parent_panel = None
 
     def set_parent_panel(self, nearby_panels):
-        return min(nearby_panels, key=lambda p: p.separation(self))
+        return min(nearby_panels, key=lambda p: p.center_separation(self))
 
 
 
