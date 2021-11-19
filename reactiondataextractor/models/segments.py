@@ -18,7 +18,7 @@ email: m.swain@me.com
 from __future__ import absolute_import
 from __future__ import division
 
-
+import copy
 from collections.abc import Collection
 from enum import Enum
 from functools import wraps
@@ -122,10 +122,16 @@ class PanelMethodsMixin:
     def area(self):
         return self.panel.area
 
-    def separation(self, obj2):
-        return self.panel.separation(obj2)
+    def center_separation(self, obj2):
+        return self.panel.center_separation(obj2)
 
+    def edge_separation(self, obj2):
+        return self.panel.edge_separation(obj2)
 
+    def contains(self, other):
+        if hasattr(other, 'panel'):
+            other = other.panel
+        return self.panel.contains(other)
 
     def __iter__(self):
         return iter(self.panel)
@@ -158,24 +164,40 @@ class Rect(object):
         """
         :param (int, int, int, int): (top, left, bottom, right) coordinates of top-left and bottom-right rectangle points
         """
-        self.coords = coords
+        self.coords = list(coords)
 
 
     @property
     def top(self):
         return self.coords[0]
 
+    @top.setter
+    def top(self, value):
+        self.coords[0] = value
+
     @property
     def left(self):
         return self.coords[1]
+
+    @left.setter
+    def left(self, value):
+        self.coords[1] = value
 
     @property
     def bottom(self):
         return self.coords[2]
 
+    @bottom.setter
+    def bottom(self, value):
+        self.coords[2] = value
+
     @property
     def right(self):
         return self.coords[3]
+
+    @right.setter
+    def right(self, value):
+        self.coords[3] = value
 
     @property
     def width(self):
@@ -300,7 +322,7 @@ class Rect(object):
             return NotImplemented
         return overlaps
 
-    def separation(self, other):
+    def center_separation(self, other):
         """ Returns the distance between the center of each graph
         :param Rect other: Another rectangle
         :return: Distance between centroids of rectangle
@@ -322,6 +344,42 @@ class Rect(object):
         length = abs(self.center[1] - y)
         return np.hypot(length, height)
 
+    def edge_separation(self, other_rect):
+        """Cqlculates the distance between the closest edges or corners of two rectangles. If the two overlap, the
+        distance is set to 0"""
+        def dist(p1, p2):
+            x1, y1 = p1
+            x2, y2 = p2
+            width = x2 - x1
+            height = y2 - y2
+            return np.hypot(width, height)
+        x1, y1, x1b, y1b = self
+        x2, y2, x2b, y2b = other_rect
+
+        left = x2b < x1
+        right = x1b < x2
+        bottom = y2b < y1
+        top = y1b < y2
+        if top and left:
+            return dist((x1, y1b), (x2b, y2))
+        elif left and bottom:
+            return dist((x1, y1), (x2b, y2b))
+        elif bottom and right:
+            return dist((x1b, y1), (x2, y2b))
+        elif right and top:
+            return dist((x1b, y1b), (x2, y2))
+        elif left:
+            return x1 - x2b
+        elif right:
+            return x2 - x1b
+        elif bottom:
+            return y1 - y2b
+        elif top:
+            return y2 - y1b
+        else:  # rectangles intersect
+            return 0.
+
+
     def overlaps_vertically(self, other_rect):
         """
         Return True if two `Rect` objects overlap along the vertical axis (i.e. when projected onto it), False otherwise
@@ -342,14 +400,15 @@ class Rect(object):
         :rtype: Crop"""
         crop = self.create_crop(figure)
         img = np.pad(crop.img, pad_width=pad_width, constant_values=pad_val)
-        dummy_fig = Figure(img, img)
-        return Crop(dummy_fig, Rect((0, 0, dummy_fig.height, dummy_fig.width)))
+        crop.img = img
+        crop.padding = pad_width
+        return crop
 
     def create_extended_crop(self, figure, extension):
         """Creates a crop from the rectangle and its surroundings in figure
         :return: crop containing the rectangle and its neighbourhood
         :rtype: Crop"""
-        left, right, top, bottom = self.__call__()
+        top, left, bottom, right = self
         left, right = left - extension, right + extension
         top, bottom = top - extension, bottom + extension
         return Panel((top, left, bottom, right)).create_crop(figure)
@@ -440,7 +499,7 @@ class Figure(object):
         self.width, self.height = img.shape[1], img.shape[0]
         self.center = (int(self.width * 0.5), int(self.height) * 0.5)
         self.connected_components = None
-        self.get_connected_components()
+        self.set_connected_components()
 
     def __repr__(self):
         return '<%s>' % self.__class__.__name__
@@ -465,7 +524,7 @@ class Figure(object):
         top, bottom = np.where(cols)[0][[0, -1]]
         return Panel(left, right, top, bottom)
 
-    def get_connected_components(self):
+    def set_connected_components(self):
         """
         Convenience function that tags ccs in an img and creates their Panels
         :return set: set of Panels of connected components
@@ -521,16 +580,19 @@ class Crop(Figure):
     :type main_figure: Figure
     :param crop_params: parameters of the crop (either left, right, top, bottom tuple or Rect() with these attributes)
     :type crop_params: tuple|Rect
+    :param padding: How much padding was added
+    :type padding: tuple(int,int)
     """
-    def __init__(self, main_figure, crop_params):
+    def __init__(self, main_figure, crop_params, padding=(0, 0)):
         self.main_figure = main_figure
-        self.crop_params = crop_params  # (left, right, top, bottom) of the intended crop or Rect() with these attribs
+        self.crop_params = crop_params  # (top, left, bottom, right) of the intended crop or Rect() with these attribs
+        self.padding = padding
         self.cropped_rect = None  # Actual rectangle used for the crop - different if crop_params are out of fig bounds
         self.img = None
         self.raw_img = None
         self._crop_main_figure()
         self.connected_components = None
-        self.get_connected_components()
+        self.set_connected_components()
 
 
     def __eq__(self, other):
@@ -545,17 +607,30 @@ class Crop(Figure):
         :return: corresponding Panel|Rect object
         :rtype: type(element)
         `"""
-        if hasattr(element, 'row') and hasattr(element, 'col'):
-            new_row = element.row + self.cropped_rect.top
-            new_col = element.col + self.cropped_rect.left
-            return element.__class__(row=new_row, col=new_col)
+        if hasattr(element, '__len__') and len(element) == 2:
+            y, x = element
+            return y + self.cropped_rect.top - self.padding[0], x + self.cropped_rect.left - self.padding[1]
+        # elem_copy = copy.deepcopy(element)
+        # if hasattr(element, 'row') and hasattr(element, 'col'):
+        #     new_row = element.row + self.cropped_rect.top
+        #     new_col = element.col + self.cropped_rect.left
+        #     attrs = 'row', 'col'
+        #     attr_vals = new_row, new_col
+        #     new_element = element.__class__(row=new_row, col=new_col)
+        #     # [setattr(elem_copy, attr, val) for attr, val in zip(attrs, attr_vals)]
+        #     return new_element
 
         else:
-            new_top = element.top + self.cropped_rect.top
-            new_bottom = new_top + element.height
-            new_left = element.left + self.cropped_rect.left
-            new_right = new_left + element.width
-            return element.__class__((new_top, new_left, new_bottom, new_right))
+
+            new_top = element.top + self.cropped_rect.top - self.padding[0]
+            new_bottom = new_top + element.height - self.padding[0]
+            new_left = element.left + self.cropped_rect.left - - self.padding[1]
+            new_right = new_left + element.width - self.padding[1]
+            # attrs = 'top', 'left', 'bottom', 'right'
+            # attr_vals = new_top, new_left, new_bottom, new_right
+            new_element = element.__class__((new_top, new_left, new_bottom, new_right))
+            new_element.role = element.role
+            return new_element
 
     def in_crop(self, cc):
         """
@@ -574,7 +649,7 @@ class Crop(Figure):
         new_obj.role = cc.role
         return new_obj
 
-    def get_connected_components(self):
+    def set_connected_components(self):
         """
         Transforms connected components from the main figure into the frame of reference of the crop. Only the
         components that fit fully within the crop are included.
@@ -582,11 +657,8 @@ class Crop(Figure):
         """
         c_top, c_left, c_bottom, c_right = self.cropped_rect   # c is for 'crop'
 
-        transformed_ccs = [cc for cc in self.main_figure.connected_components
-                           if cc.right <= c_right and cc.left >= c_left]
-
+        transformed_ccs = [cc for cc in self.main_figure.connected_components if cc.right <= c_right and cc.left >= c_left]
         transformed_ccs = [cc for cc in transformed_ccs if cc.bottom <= c_bottom and cc.top >= c_top]
-
         transformed_ccs = [self.in_crop(cc) for cc in transformed_ccs]
 
         self.connected_components = transformed_ccs

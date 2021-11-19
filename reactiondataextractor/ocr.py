@@ -850,7 +850,6 @@ class TextParserAdapter:
         :type element_type: TextParserAdapter.ParsedLevelEnum"""
 
         max_level = self.level.value - element_type.value
-        print(max_level)
         current_level = 0
 
         to_traverse = [self.parsed]

@@ -255,7 +255,7 @@ class Label(PanelMethodsMixin):
         panel = Panel(left, right, top, bottom)
         return cls(panel, text)
 
-    def __init__(self, panel, text=None, r_group=None, *, _prior_class=None):
+    def __init__(self, panel, text=None, r_group=None, *, parent_panel=None, _prior_class=None):
         if r_group is None:
             r_group = []
         if text is None:
@@ -264,6 +264,11 @@ class Label(PanelMethodsMixin):
         self._text = text
         self.r_group = r_group
         self._prior_class = _prior_class
+        self._parent_panel = parent_panel
+
+    @property
+    def diagram(self):
+        return self._parent_panel
 
     @property
     def text(self):
@@ -277,7 +282,7 @@ class Label(PanelMethodsMixin):
         return f'Label(panel={self.panel}, text={self.text}, r_group={self.r_group})'
 
     def __str__(self):
-        return f'Label(Text: {", ".join(sent.text.strip() for sent in self.text)})'
+        return f'Label(Text: {", ".join(sent for sent in self.text)})'
 
     def __hash__(self):
         return hash(self.panel)
