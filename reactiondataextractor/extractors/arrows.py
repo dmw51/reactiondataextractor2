@@ -9,7 +9,6 @@ email: dmw51@cam.ac.uk
 import abc
 import copy
 import logging
-import os
 from itertools import product
 from operator import itemgetter
 
@@ -19,25 +18,25 @@ from matplotlib.patches import Rectangle
 from scipy.ndimage import label
 from tensorflow.keras.models import load_model
 
-from reactiondataextractor.config import ExtractorConfig
+from reactiondataextractor.config import ExtractorConfig, Config
 from reactiondataextractor.extractors.base import BaseExtractor, Candidate
 from reactiondataextractor.models.exceptions import NotAnArrowException
 from reactiondataextractor.models.segments import FigureRoleEnum, PanelMethodsMixin, Panel
 from reactiondataextractor.utils import skeletonize, is_a_single_line
 from reactiondataextractor.models.geometry import Point, Line
-from reactiondataextractor.processors import Isolator
+from reactiondataextractor.processors import Isolator, EdgeExtractor
 
 log = logging.getLogger('arrows')
 
 
 
 
-class ArrowExtractorGeneric(BaseExtractor):
+class ArrowExtractor(BaseExtractor):
 
     def __init__(self, fig):
         super().__init__(fig)
-        self.solid_arrow_extr = SolidArrowExtractorGeneric(fig)
-        self.curly_arrow_extr = CurlyArrowExtractorGeneric(fig)
+        self.solid_arrow_extractor = SolidArrowExtractor(fig)
+        self.curly_arrow_extractor = CurlyArrowExtractorGeneric(fig)
 
         self.arrow_detector = load_model(ExtractorConfig.ARROW_DETECTOR_PATH)
         self.arrow_classifier = load_model(ExtractorConfig.ARROW_CLASSIFIER_PATH)
@@ -48,15 +47,18 @@ class ArrowExtractorGeneric(BaseExtractor):
                             2: ResonanceArrow,
                             3: CurlyArrow
                             }
-
+        self._solid_arrows = []
+        self._eq_arrows = []
+        self._res_arrows = []
+        self._curly_arrows = []
     @property
     def extracted(self):
         return self.arrows
 
     def extract(self):
         """Extracts all types of arrows, then combines them, filters duplicates and finally reclassifies them"""
-        solid_arrows = self.solid_arrow_extr.extract()
-        curly_arrows = self.curly_arrow_extr.extract()
+        solid_arrows = self.solid_arrow_extractor.extract()
+        curly_arrows = self.curly_arrow_extractor.extract()
         arrows = self.remove_duplicates(solid_arrows + curly_arrows)
         arrows = self.filter_false_positives(arrows)
         solid_arrows, eq_arrows, res_arrows,  curly_arrows = self.reclassify(arrows)
@@ -166,9 +168,7 @@ class ArrowExtractorGeneric(BaseExtractor):
         return solid_arrows, eq_arrows, res_arrows, curly_arrows
 
 
-
-
-class SolidArrowExtractorGeneric(BaseExtractor):
+class SolidArrowExtractor(BaseExtractor):
     """This solid arrow extractor is less restrictive in filtering out candidates for solid arrows. Its main goal
     is to provide suitable candidates which are to be filtered out by another model."""
 
@@ -190,7 +190,6 @@ class SolidArrowExtractorGeneric(BaseExtractor):
         """
         Finds all solid (straight) arrows in ``fig`` subject to ``threshold`` number of pixels and ``min_arrow_length``
         minimum line length.
-        :param int threshold: threshold number of pixels needed to define a line (Hough transform param).
         :return: collection of arrow objects
         :rtype: list
         """
@@ -244,9 +243,6 @@ class SolidArrowExtractorGeneric(BaseExtractor):
                 ax.add_patch(rect_bbox)
 
 
-
-
-
 class CurlyArrowExtractorGeneric(BaseExtractor):
 
     def __init__(self, fig):
@@ -289,7 +285,6 @@ class CurlyArrowExtractorGeneric(BaseExtractor):
         return found_arrows
 
 
-
 class BaseArrow(PanelMethodsMixin):
     """Base arrow class common to all arrows
     :param pixels: pixels forming the arrows
@@ -307,20 +302,38 @@ class BaseArrow(PanelMethodsMixin):
         self.panel = panel
         # slope = self.line.slope
         self._center_px = None
+        self.reference_pt = self.compute_reaction_reference_pt()
         self.initialize()
-
-
-
-    # @property
-    # def panel(self):
-    #     return self._panel
-
 
     @abc.abstractmethod
     def initialize(self):
         """Given `pixels` and `panel` attributes, this method checks if other (relevant) initialization attributes have been
-        precomputed. If not, these should be computed and set accordingly"""
+        precomputed. If not, these should be computed and set accordingly."""
         pass
+
+    def compute_reaction_reference_pt(self):
+        """Computes a reference point for a reaction step. This point alongside arrow's centerpoint to decide whether
+        a diagram belongs to reactants or products of a step (by comparing pairwise distances). This reference point
+        is a centre of mass in an eroded arrow crop (erosion further moves the original centre of mass away from the
+        center point"""
+        scaling_factor = 2
+        pad_width = 10
+
+        isolated_arrow = Isolator(Config.FIGURE, self, isolate_mask=True).process()
+        arrow_crop = self.panel.create_padded_crop(isolated_arrow, pad_width=(pad_width, pad_width))
+        arrow_crop.img = cv2.resize(arrow_crop.img, (0, 0), fx=scaling_factor, fy=scaling_factor)
+        binarised = EdgeExtractor(arrow_crop).process()
+        eroded = cv2.erode(binarised.img, np.ones((6, 6)), iterations=2)
+
+        #Compute COM in the crop, then transform back to main figure coordinates
+        rows, cols = np.where(eroded == 255)
+        rows, cols = rows/scaling_factor - pad_width, cols/scaling_factor - pad_width
+        row, col = int(np.mean(rows)), int(np.mean(cols))
+        row, col = arrow_crop.in_main_fig((row, col))
+
+        return row, col
+
+
     @property
     def center_px(self):
         """
@@ -359,35 +372,7 @@ class BaseArrow(PanelMethodsMixin):
         pass
 
 
-class UnidirectionalArrow(BaseArrow):
-
-    @abc.abstractmethod
-    def __init__(self, pixels, panel):
-        super().__init__(pixels, panel)
-        self.react_side, self.prod_side = self.get_direction()
-
-
-    @abc.abstractmethod
-    def get_direction(self):
-        """Establishes the direction of an arrow. Returns a tuple of two outermost points on each side of an arrow
-        close to reactants or products in the format (react_side, prod_side)"""
-        pass
-
-    @property
-    def react_point(self):
-        return np.mean(self.react_side)
-
-    @property
-    def prod_point(self):
-        return np.mean(self.prod_side)
-
-
-class BidirectionalArrow(BaseArrow):
-    #TODO
-    pass
-
-
-class SolidArrow(UnidirectionalArrow):
+class SolidArrow(BaseArrow):
     """
     Class used to represent simple reaction arrows.
     :param pixels: pixels forming the arrows
@@ -406,33 +391,9 @@ class SolidArrow(UnidirectionalArrow):
         super(SolidArrow, self).__init__(pixels, panel)
         self.sort_pixels()
 
-
-
-        #
-        # a_ratio = self.panel.aspect_ratio
-        # a_ratio = 1/a_ratio if a_ratio < 1 else a_ratio
-        # if a_ratio < 3:
-        #     raise NotAnArrowException('aspect ratio is not within the accepted range')
-        #
-        # # self.react_side, self.prod_side = self.get_direction()
-        # pixel_majority = len(self.prod_side) - len(self.react_side)
-        # #TODO: Check if these manual exclusion criteria can be removed when the arrow detector model is introduced
-        # num_pixels = len(self.pixels)
-        # min_pixels = min(int(0.1 * num_pixels), 15)
-        # if pixel_majority < min_pixels:
-        #     raise NotAnArrowException('insufficient pixel majority')
-        # elif pixel_majority < 2 * min_pixels:
-        #     log.warning('Difficulty detecting arrow sides - low pixel majority')
-        #
-        # log.debug('Arrow accepted!')
-
     def initialize(self):
         if self.line is None:
             self.line = Line.approximate_line(self.pixels[0], self.pixels[-1])
-
-
-
-
 
     @property
     def is_vertical(self):
@@ -443,7 +404,7 @@ class SolidArrow(UnidirectionalArrow):
         return self.line.slope
 
     def __repr__(self):
-        return f'SolidArrow(pixels={self.pixels}, line={self.line}, panel={self.panel})'
+        return f'SolidArrow(pixels={self.pixels[:5]},..., line={self.line}, panel={self.panel})'
 
     def __str__(self):
         left, right, top, bottom = self.panel
@@ -454,18 +415,6 @@ class SolidArrow(UnidirectionalArrow):
 
     def __hash__(self):
         return hash(pixel for pixel in self.pixels)
-
-    @property
-    def hook(self):
-        """
-        Returns the last pixel of an arrow hook.
-        :return:
-        """
-        if self.is_vertical:
-            prod_side_lhs = True if self.prod_side[0].row < self.react_side[0].row else False
-        else:
-            prod_side_lhs = True if self.prod_side[0].col < self.react_side[0].col else False
-        return self.prod_side[0] if prod_side_lhs else self.prod_side[-1]
 
     def sort_pixels(self):
         """
@@ -478,37 +427,6 @@ class SolidArrow(UnidirectionalArrow):
         else:
             self.pixels.sort(key=lambda pixel: pixel.col)
 
-    def get_direction(self):
-        """Retrieves the direction of an arrow by looking at the number of pixels on each side.
-        Splits an arrow in the middle depending on its slope and calculated the number of pixels in each part."""
-        center = self.center
-        center = Point(center[1], center[0])
-        if self.is_vertical:
-            part_1 = [pixel for pixel in self.pixels if pixel.row < center.row]
-            part_2 = [pixel for pixel in self.pixels if pixel.row > center.row]
-
-        elif self.line.slope == 0:
-            part_1 = [pixel for pixel in self.pixels if pixel.col < center.col]
-            part_2 = [pixel for pixel in self.pixels if pixel.col > center.col]
-
-        else:
-            p_slope = -1/self.line.slope
-            p_intercept = center.row - center.col*p_slope
-            p_line = lambda point: point.col*p_slope + p_intercept
-            part_1 = [pixel for pixel in self.pixels if pixel.row < p_line(pixel)]
-            part_2 = [pixel for pixel in self.pixels if pixel.row > p_line(pixel)]
-
-        if len(part_1) > len(part_2):
-            react_side = part_2
-            prod_side = part_1
-        else:
-            react_side = part_1
-            prod_side = part_2
-
-        log.debug('Established reactant and product sides of an arrow.')
-        log.debug('Number of pixel on reactants side: %s ', len(react_side))
-        log.debug('product side: %s ', len(prod_side))
-        return react_side, prod_side
 
 
 class CurlyArrow(BaseArrow):
@@ -522,19 +440,39 @@ class CurlyArrow(BaseArrow):
         if self.contour is None:
             isolated_arrow_fig = Isolator(None, self, isolate_mask=True).process()
             cnt, _ = cv2.findContours(isolated_arrow_fig.img,
-                                      ExtractorConfig.CURLY_ARROW_CNT_MODE, ExtractorConfig.CURLY_ARROW_CNT_METHOD )
+                                      ExtractorConfig.CURLY_ARROW_CNT_MODE, ExtractorConfig.CURLY_ARROW_CNT_METHOD)
             assert len(cnt) == 1
             self.contour = cnt[0]
 
 
-class ResonanceArrow(BidirectionalArrow):
-    #TODO
-    pass
+class ResonanceArrow(BaseArrow):
+    def __init__(self, pixels, panel, line=None, contour=None):
+
+        self.line = line
+        self.contour = contour
+        super().__init__(pixels, panel)
+        self.sort_pixels()
+
+    def initialize(self):
+        if self.line is None:
+            pass
+        if self.contour is None:
+            pass
 
 
-class EquilibriumArrow(BidirectionalArrow):
-    #TODO
-    pass
+class EquilibriumArrow(BaseArrow):
+    def __init__(self, pixels, panel, line=None, contour=None):
+
+        self.line = line
+        self.contour = contour
+        super().__init__(pixels, panel)
+        self.sort_pixels()
+
+    def initialize(self):
+        if self.line is None:
+            pass
+        if self.contour is None:
+            pass
 
 
 class ArrowCandidate(Candidate):
@@ -547,6 +485,3 @@ class ArrowCandidate(Candidate):
         self.panel = panel
         self.line = line
         self.contour = contour
-
-
-
