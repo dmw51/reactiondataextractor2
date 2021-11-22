@@ -329,9 +329,11 @@ def isolate_patches(fig, to_isolate):
         bottom = connected_component.bottom
         left = connected_component.left
         right = connected_component.right
-        isolated[top:bottom, left:right] = fig.img[top:bottom, left:right]
+        isolated[top:bottom+1, left:right+1] = fig.img[top:bottom+1, left:right+1]
 
     fig = Figure(img=isolated, raw_img=fig.raw_img, )
+    fig.connected_components = to_isolate
+
     return fig
 
 def HoughLinesP(*args, **kwargs):
