@@ -61,7 +61,8 @@ class ImageReader(Processor):
         if img is None and self.ext == '.gif':   # Ensure this special case is treated
             img = imageio.mimread(self.filepath)
             img = img[0]
-            assert len(img.shape) == 2  #
+            img = self._convert_gif(img)
+
             # img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         raw_img = img
         bg_value = mode(img.ravel())[0][0]
@@ -70,6 +71,19 @@ class ImageReader(Processor):
         self.fig = Figure(img=img, raw_img=raw_img)
         return self.fig
 
+    def _convert_gif(self, img):
+        if self.color_mode == self.COLOR_MODE.GRAY:
+            if len(img.shape) == 3 and img.shape[-1] == 4:  # RGBA
+                img = cv2.cvtColor(img, cv2.COLOR_RGBA2GRAY )
+            elif len(img.shape) == 3 and img.shape[-1] == 3:  # RGB
+                img = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+            return img
+        elif self.color_mode == self.COLOR_MODE.RGB:
+            if len(img.shape) == 3 and img.shape[-1] == 4:  # RGBA
+                img = cv2.cvtColor(img, cv2.COLOR_RGBA2RGB )
+            elif len(img.shape) == 2:  #Gray
+                img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
+            return img
 
 class TextLineRemover(Processor):
     WIDTH_THRESH_FACTOR = 0.3

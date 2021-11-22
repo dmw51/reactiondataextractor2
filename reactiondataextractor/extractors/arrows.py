@@ -28,15 +28,12 @@ from reactiondataextractor.processors import Isolator, EdgeExtractor
 
 log = logging.getLogger('arrows')
 
-
-
-
 class ArrowExtractor(BaseExtractor):
 
     def __init__(self, fig):
         super().__init__(fig)
-        self.solid_arrow_extractor = SolidArrowExtractor(fig)
-        self.curly_arrow_extractor = CurlyArrowExtractorGeneric(fig)
+        self.solid_arrow_extractor = SolidArrowCandidateExtractor(fig)
+        self.curly_arrow_extractor = CurlyArrowCandidateExtractor(fig)
 
         self.arrow_detector = load_model(ExtractorConfig.ARROW_DETECTOR_PATH)
         self.arrow_classifier = load_model(ExtractorConfig.ARROW_CLASSIFIER_PATH)
@@ -51,6 +48,8 @@ class ArrowExtractor(BaseExtractor):
         self._eq_arrows = []
         self._res_arrows = []
         self._curly_arrows = []
+
+
     @property
     def extracted(self):
         return self.arrows
@@ -66,8 +65,24 @@ class ArrowExtractor(BaseExtractor):
         self._eq_arrows = eq_arrows
         self._res_arrows = res_arrows
         self._curly_arrows = curly_arrows
-        self.arrows = solid_arrows + curly_arrows + res_arrows, eq_arrows
+        self.arrows = solid_arrows + curly_arrows + res_arrows + eq_arrows
+
         return solid_arrows, eq_arrows, res_arrows, curly_arrows
+
+    def plot_extracted(self, ax):
+        label_text = {SolidArrow: 'Solid arrow',
+                      EquilibriumArrow: 'Equilibrium arrow',
+                      ResonanceArrow: 'Resonance arrow',
+                      CurlyArrow: 'Curly arrow'}
+
+        for arrow in self.extracted:
+            panel = arrow.panel
+            rect_bbox = Rectangle((panel.left, panel.top), panel.right - panel.left, panel.bottom - panel.top,
+                                  facecolor='y', edgecolor=None, alpha=0.4)
+            ax.add_patch(rect_bbox)
+            ax.text(panel.left, panel.top, label_text[arrow.__class__], c='b')
+
+
 
     def remove_duplicates(self, arrow_candidates):
         def is_different_px(px1, px2):
@@ -85,8 +100,8 @@ class ArrowExtractor(BaseExtractor):
         arrow_crops = np.stack(arrow_crops, axis=0)
         arrows_pred = self.arrow_detector.predict(x=arrow_crops).squeeze()
         arrows_pred = arrows_pred > ExtractorConfig.ARROW_DETECTOR_THRESH
-        inliers = np.argwhere(arrows_pred == True).squeeze()
-        arrows = itemgetter(*inliers)(arrows)
+        inliers = np.argwhere(arrows_pred == True).squeeze(axis=1)
+        arrows = [arrows[idx] for idx in inliers]
         return arrows
         # solid_arrows = []
         # curly_arrows = []
@@ -144,12 +159,6 @@ class ArrowExtractor(BaseExtractor):
         # arrow_vector = np.reshape(arrow_crop, -1)
         return arrow_crop
 
-    # def postprocess_model_output(self, output):
-    #     """Takes np.array `output` output from a model and postprocesses for novelty detection"""
-    #     output = np.squeeze(output)
-    #     output = output > ExtractorConfig.RECONSTR_BIN_THRESH
-    #     return output
-
     def instantiate_arrow(self, arrow_candidate, cls_idx):
         return self._class_dict[cls_idx](**arrow_candidate.pass_attributes())
 
@@ -168,7 +177,7 @@ class ArrowExtractor(BaseExtractor):
         return solid_arrows, eq_arrows, res_arrows, curly_arrows
 
 
-class SolidArrowExtractor(BaseExtractor):
+class SolidArrowCandidateExtractor(BaseExtractor):
     """This solid arrow extractor is less restrictive in filtering out candidates for solid arrows. Its main goal
     is to provide suitable candidates which are to be filtered out by another model."""
 
@@ -243,7 +252,7 @@ class SolidArrowExtractor(BaseExtractor):
                 ax.add_patch(rect_bbox)
 
 
-class CurlyArrowExtractorGeneric(BaseExtractor):
+class CurlyArrowCandidateExtractor(BaseExtractor):
 
     def __init__(self, fig):
         self.arrows = None
@@ -284,6 +293,17 @@ class CurlyArrowExtractorGeneric(BaseExtractor):
         self.arrows = found_arrows
         return found_arrows
 
+    def plot_extracted(self, ax):
+
+        """Adds extracted panels onto a canvas of ``ax``"""
+        if not self.extracted:
+            pass
+        else:
+            for arrow in self.extracted:
+                panel = arrow.panel
+                rect_bbox = Rectangle((panel.left, panel.top), panel.right - panel.left, panel.bottom - panel.top,
+                                      facecolor='y', edgecolor=None, alpha=0.4)
+                ax.add_patch(rect_bbox)
 
 class BaseArrow(PanelMethodsMixin):
     """Base arrow class common to all arrows
@@ -320,7 +340,7 @@ class BaseArrow(PanelMethodsMixin):
         pad_width = 10
 
         isolated_arrow = Isolator(Config.FIGURE, self, isolate_mask=True).process()
-        arrow_crop = self.panel.create_padded_crop(isolated_arrow, pad_width=(pad_width, pad_width))
+        arrow_crop = self.panel.create_padded_crop(isolated_arrow, pad_width=pad_width)
         arrow_crop.img = cv2.resize(arrow_crop.img, (0, 0), fx=scaling_factor, fy=scaling_factor)
         binarised = EdgeExtractor(arrow_crop).process()
         eroded = cv2.erode(binarised.img, np.ones((6, 6)), iterations=2)
