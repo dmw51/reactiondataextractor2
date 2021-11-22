@@ -33,6 +33,8 @@ from . import config
 # #TODO: change from skimage to opencv
 import numpy as np
 
+from .models.segments import Panel
+
 
 def estimate_single_bond(fig):
     """Estimates length of a single bond in an image
@@ -103,38 +105,38 @@ def estimate_single_bond(fig):
 #     return left_extended_point, right_extended_point
 #
 #
-# def find_nearby_ccs(start, all_relevant_ccs, distances, role=None, condition=(lambda cc: True)):
-#     """
-#     Find all structures close to ``start`` position. All found structures are added to a queue and
-#     checked again to form a cluster of nearby structures.
-#     Found ccs are added to a frontier if they satisfy a condition. Elements of the frontier are removed one by one and
-#     their neighbourhoods checked for new ccs. The search ends when the frontier is empty. Roles of found ccs may also
-#     be set after the routine is completed.
-#     :param Point|(x,y)|Panel start: reference object where the search starts
-#     :param [Panel,...] all_relevant_ccs: list of all found structures
-#     :param FigureRoleEnum|ReactionRoleEnum role: class specifying role of the ccs in the scheme
-#                                                                      (e.g. Diagram, Conditions)
-#     :param (float, lambda) distances: a tuple (maximum_initial_distance, distance_function) which specifies allowed
-#     distance from the starting point and a function defining cut-off distance for subsequent reference ccs
-#     :param lambda condition: optional condition to decide whether a connected component should be added to the frontier
-#                                                                                                                 or not.
-#     :return: List of all nearby structures
-#     """
-#     max_initial_distance, distance_fn = distances
-#     frontier = [start]
-#     found_ccs = []
-#     visited = set()
-#     while frontier:
-#         reference = frontier.pop()
-#         visited.add(reference)
-#         max_distance = distance_fn(reference) if isinstance(reference, Panel) else max_initial_distance
-#         successors = [cc for cc in all_relevant_ccs if cc.separation(reference) < max_distance
-#                       and cc not in visited and condition(cc)]
-#         newly_found = [found_cc for found_cc in successors if found_cc not in found_ccs]
-#         frontier.extend(successors)
-#         found_ccs.extend(newly_found)
-#
-#     if role is not None:
-#         [setattr(cc, 'role', role) for cc in found_ccs if not getattr(cc, 'role')]
-#
-#     return found_ccs
+def find_nearby_ccs(start, all_relevant_ccs, distances, role=None, condition=(lambda cc: True)):
+    """
+    Find all structures close to ``start`` position. All found structures are added to a queue and
+    checked again to form a cluster of nearby structures.
+    Found ccs are added to a frontier if they satisfy a condition. Elements of the frontier are removed one by one and
+    their neighbourhoods checked for new ccs. The search ends when the frontier is empty. Roles of found ccs may also
+    be set after the routine is completed.
+    :param Point|(x,y)|Panel start: reference object where the search starts
+    :param [Panel,...] all_relevant_ccs: list of all found structures
+    :param FigureRoleEnum|ReactionRoleEnum role: class specifying role of the ccs in the scheme
+                                                                     (e.g. Diagram, Conditions)
+    :param (float, lambda) distances: a tuple (maximum_initial_distance, distance_function) which specifies allowed
+    distance from the starting point and a function defining cut-off distance for subsequent reference ccs
+    :param lambda condition: optional condition to decide whether a connected component should be added to the frontier
+                                                                                                                or not.
+    :return: List of all nearby structures
+    """
+    max_initial_distance, distance_fn = distances
+    frontier = [start]
+    found_ccs = []
+    visited = set()
+    while frontier:
+        reference = frontier.pop()
+        visited.add(reference)
+        max_distance = distance_fn(reference) if isinstance(reference, Panel) else max_initial_distance
+        successors = [cc for cc in all_relevant_ccs if cc.edge_separation(reference) < max_distance
+                      and cc not in visited and condition(cc)]
+        newly_found = [found_cc for found_cc in successors if found_cc not in found_ccs]
+        frontier.extend(successors)
+        found_ccs.extend(newly_found)
+
+    if role is not None:
+        [setattr(cc, 'role', role) for cc in found_ccs if not getattr(cc, 'role')]
+
+    return found_ccs

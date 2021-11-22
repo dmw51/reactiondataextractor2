@@ -33,3 +33,6 @@ class ProcessorConfig(Config):
 
 class OCRConfig(Config):
     PIECEWISE_OCR_THRESH_AREA = 100 #TODO: This value should be appropriate for commas, dots etc - optimise
+
+class SchemeConfig(Config):
+    SEARCH_DISTANCE_FACTOR = 0.25
