@@ -473,7 +473,7 @@ def is_a_single_line(fig, panel, line_length):
     :return:
     """
 
-    lines = cv2.HoughLinesP(isolate_patches(fig, [panel]).img, 1, np.pi/128, minLineLength=line_length,
+    lines = cv2.HoughLinesP(isolate_patches(fig, [panel]).img, 1, np.pi/180, minLineLength=line_length,
                             threshold=line_length )
     if lines is None:
         return False
