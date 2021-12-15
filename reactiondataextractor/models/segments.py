@@ -19,6 +19,7 @@ from __future__ import absolute_import
 from __future__ import division
 
 import copy
+from collections import Sequence
 from collections.abc import Collection
 from enum import Enum
 from functools import wraps
@@ -344,40 +345,54 @@ class Rect(object):
         length = abs(self.center[1] - y)
         return np.hypot(length, height)
 
-    def edge_separation(self, other_rect):
+    def edge_separation(self, other):
+        """Cqlculates the distance between the closest edges or corners of two rectangles or a rectangle and a point.
+         If the two overlap, the distance is set to 0"""
+        ### This is wrong (
+        if isinstance(other, Point):
+            y, x = other
+            other = Rect([y, x, y, x]) # repeat point coordinates twice
+        elif isinstance(other, Sequence) and len(other) == 2:
+            x, y = other
+            other = Rect([y, x, y, x])
+        ##
+        return self._edge_separation_rect(other)
+
+    def _edge_separation_rect(self, other_rect):
         """Cqlculates the distance between the closest edges or corners of two rectangles. If the two overlap, the
         distance is set to 0"""
         def dist(p1, p2):
             x1, y1 = p1
             x2, y2 = p2
             width = x2 - x1
-            height = y2 - y2
+            height = y2 - y1
             return np.hypot(width, height)
-        x1, y1, x1b, y1b = self
-        x2, y2, x2b, y2b = other_rect
+        t1, l1, b1, r1 = self
+        t2, l2, b2, r2 = other_rect
 
-        left = x2b < x1
-        right = x1b < x2
-        bottom = y2b < y1
-        top = y1b < y2
+        left = r2 < l1
+        right = r1 < l2
+        bottom = b1 < t2
+        top = b2 < t1
         if top and left:
-            return dist((x1, y1b), (x2b, y2))
-        elif left and bottom:
-            return dist((x1, y1), (x2b, y2b))
+            return dist((l1, t1), (r2, b2))
+        elif bottom and left:
+            return dist((l1, t1), (r2, t2))
         elif bottom and right:
-            return dist((x1b, y1), (x2, y2b))
+            return dist((r1, t1), (l2, t2))
         elif right and top:
-            return dist((x1b, y1b), (x2, y2))
+            return dist((r1, b1), (l2, b2))
         elif left:
-            return x1 - x2b
+            return l1 - r2
         elif right:
-            return x2 - x1b
+            return l2 - r1
         elif bottom:
-            return y1 - y2b
+            return t2 - b1
         elif top:
-            return y2 - y1b
+            return t1 - b2
         else:  # rectangles intersect
             return 0.
+
 
 
     def overlaps_vertically(self, other_rect):
@@ -394,14 +409,14 @@ class Rect(object):
         :rtype: Crop"""
         return Crop(figure, self)
 
-    def create_padded_crop(self, figure, pad_width=(10, 10), pad_val=0):
+    def create_padded_crop(self, figure, pad_width=(10)):
         """Creates a crop from the rectangle in figure and pads it
         :return: padded crop containing the rectangle
         :rtype: Crop"""
         crop = self.create_crop(figure)
-        img = np.pad(crop.img, pad_width=pad_width, constant_values=pad_val)
-        crop.img = img
-        crop.padding = pad_width
+        # img = np.pad(crop.img, pad_width=pad_width, constant_values=pad_val)
+        # crop.img = img
+        crop  = crop.pad_crop(pad_width)  # adjusts the img and connected_components attributes too
         return crop
 
     def create_extended_crop(self, figure, extension):
@@ -580,13 +595,16 @@ class Crop(Figure):
     :type main_figure: Figure
     :param crop_params: parameters of the crop (either left, right, top, bottom tuple or Rect() with these attributes)
     :type crop_params: tuple|Rect
-    :param padding: How much padding was added
-    :type padding: tuple(int,int)
+    # :param padding: How much padding was added after the image was cropped -either a single value, a tuple of two pairs
+    # of values consistent with `pad_width` in numpy.pad
+    # :type padding: int|tuple((int, int),(int, int))
     """
-    def __init__(self, main_figure, crop_params, padding=(0, 0)):
+    def __init__(self, main_figure, crop_params):
         self.main_figure = main_figure
         self.crop_params = crop_params  # (top, left, bottom, right) of the intended crop or Rect() with these attribs
-        self.padding = padding
+        self.padding = None
+        self._top_padding = 0
+        self._left_padding = 0
         self.cropped_rect = None  # Actual rectangle used for the crop - different if crop_params are out of fig bounds
         self.img = None
         self.raw_img = None
@@ -595,9 +613,39 @@ class Crop(Figure):
         self.set_connected_components()
 
 
-    def __eq__(self, other):
-        return self.main_figure == other.main_figure and self.crop_params == other.crop_params \
-               and self.img == other.img
+    # @property
+    # def padding(self):
+    #     return self._padding
+    #
+    # @padding.setter
+    # def padding(self, value):
+    #     if np.all(self.padding) == 0:
+    #         self.img = np.pad(self.img, value)
+    #         self._padding = value
+    #         self._top_padding = self._padding if isinstance(self._padding, int) else self._padding[0][0]
+    #         self._left_padding = self._padding if isinstance(self._padding, int) else self._padding[1][0]
+    #
+    #     else:
+    #         raise ValueError('Padding can be set only once')
+    #
+    # def __eq__(self, other):
+    #     return self.main_figure == other.main_figure and self.crop_params == other.crop_params \
+    #            and self.img == other.img
+
+
+    def pad_crop(self, pad_width):
+        """Pads crop using numpy.pad, adjusts connected components appropriately"""
+
+        self.img = np.pad(self.img, pad_width=pad_width)
+        self.padding = pad_width
+        self._top_padding = pad_width if isinstance(pad_width, int) else pad_width[0][0]
+        self._left_padding = pad_width if isinstance(pad_width, int) else pad_width[1][0]
+
+        for cc in self.connected_components:
+            cc.top, cc.bottom = cc.top + self._top_padding, cc.bottom + self._top_padding
+            cc.left, cc.right = cc.left + self._left_padding, cc.right + self._left_padding
+
+        return self
 
     def in_main_fig(self, element):
         """
@@ -609,7 +657,7 @@ class Crop(Figure):
         `"""
         if hasattr(element, '__len__') and len(element) == 2:
             y, x = element
-            return y + self.cropped_rect.top - self.padding[0], x + self.cropped_rect.left - self.padding[1]
+            return y + self.cropped_rect.top - self._top_padding, x + self.cropped_rect.left - self._left_padding
         # elem_copy = copy.deepcopy(element)
         # if hasattr(element, 'row') and hasattr(element, 'col'):
         #     new_row = element.row + self.cropped_rect.top
@@ -622,10 +670,10 @@ class Crop(Figure):
 
         else:
 
-            new_top = element.top + self.cropped_rect.top - self.padding[0]
-            new_bottom = new_top + element.height - self.padding[0]
-            new_left = element.left + self.cropped_rect.left - - self.padding[1]
-            new_right = new_left + element.width - self.padding[1]
+            new_top = element.top + self.cropped_rect.top - self._top_padding
+            new_bottom = new_top + element.height - self._top_padding
+            new_left = element.left + self.cropped_rect.left - self._left_padding
+            new_right = new_left + element.width - self._left_padding
             # attrs = 'top', 'left', 'bottom', 'right'
             # attr_vals = new_top, new_left, new_bottom, new_right
             new_element = element.__class__((new_top, new_left, new_bottom, new_right))
