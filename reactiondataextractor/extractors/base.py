@@ -20,7 +20,7 @@ class BaseExtractor:
 
     @abstractmethod
     def extract(self):
-        """This method extracts objects (arrows, conditions, diagrams or labels) from ``fig``"""
+        """This method extracts objects (arrows, conditions, diagrams or labels) from ``self.fig``"""
         pass
 
     @abstractmethod

@@ -2,6 +2,7 @@
 import copy
 
 import numpy as np
+from matplotlib.patches import Rectangle
 from scipy.stats import mode
 
 from .base import BaseExtractor, Candidate
@@ -23,6 +24,9 @@ class UnifiedExtractor(BaseExtractor):
         super().__init__(fig)
         self.model = self.load_model(ExtractorConfig.UNIFIED_EXTR_MODEL_WT_PATH)
         self.all_arrows = all_arrows
+        self.diagram_extractor = DiagramExtractor(self.fig,diag_priors=None)
+        self.label_extractor = LabelExtractor(self.fig, priors=None)
+        self.conditions_extractor = ConditionsExtractor(self.fig, priors=None)
 
 
         self._class_dict = {
@@ -46,15 +50,21 @@ class UnifiedExtractor(BaseExtractor):
         diag_priors = [self.select_diag_prior(bbox) for bbox in out_diag_bboxes]
         # diag_priors = [Panel(diag) for diag in diag_priors]
         diag_priors = self.filter_diag_false_positives(diag_priors, self.all_arrows)
-        diags = DiagramExtractor(self.fig, diag_priors).extract()
+        self.diagram_extractor.diag_priors = diag_priors
+        diags = self.diagram_extractor.extract()
         conditions_labels = [TextRegionCandidate(box, class_) for box, class_ in zip(boxes, classes)
                              if self._class_dict[class_] in [Label, Conditions]]
         adjusted_candidates = self.adjust_bboxes(conditions_labels)
         conditions, labels = self.reclassify(adjusted_candidates, self.all_arrows, diags)
         conditions, labels = [self.remove_duplicates(group) for group in [conditions, labels]]
         conditions, labels = [self.extract_elements(group, extractor) for group, extractor
-                              in zip([conditions, labels], [ConditionsExtractor, LabelExtractor])]
+                              in zip([conditions, labels], [self.conditions_extractor, self.label_extractor])]
         return diags, conditions, labels
+
+    def plot_extracted(self, ax):
+        self.diagram_extractor.plot_extracted(ax)
+        self.label_extractor.plot_extracted(ax)
+        self.conditions_extractor.plot_extracted(ax)
 
     def detect(self):
         """A method used to perform any necessary preprocessing on an input before feeding it into the object detection model
@@ -63,7 +73,8 @@ class UnifiedExtractor(BaseExtractor):
             img = np.invert(self.fig.img)
         else:
             img = self.fig.img
-        return map(lambda x: x[0].numpy(), self.model.predict(img))
+        img = (img - img.min()) / (img.max() - img.min())
+        return map(lambda x: x[0].numpy(), self.model.predict(img)) # Predicitions for first (and only) image in a batch
 
     def remove_duplicates(self, panels):
         """Removes duplicate panels inside `group`. In this context, duplicates are all panels which cover the same
@@ -100,11 +111,8 @@ class UnifiedExtractor(BaseExtractor):
         return filtered
 
     def extract_elements(self, elements, extractor):
-        return extractor(self.fig, elements).extract()
-
-
-
-
+        extractor.priors = elements
+        return extractor.extract()
 
     def select_diag_prior(self, bbox):
         bbox_crop = Crop(self.fig, bbox)
@@ -141,7 +149,6 @@ class UnifiedExtractor(BaseExtractor):
                 cand.panel = Panel.create_megarect(relevant_ccs)
                 adjusted.append(cand)
         return adjusted
-
 
 
     def reclassify(self, candidates, all_arrows, all_diags):
@@ -209,13 +216,30 @@ class DiagramExtractor(BaseExtractor):
     def __init__(self, fig, diag_priors):
         super().__init__(fig)
         self.diag_priors = diag_priors
-
-        self.fig.dilation_iterations = self._find_optimal_dilation_extent()
-        self.fig.set_roles(self.diag_priors, FigureRoleEnum.DIAGRAMPRIOR)
+        self.diags = None
 
     def extract(self):
+        assert self.diag_priors is not None, "Diag priors have not been set"
+        self.fig.dilation_iterations = self._find_optimal_dilation_extent()
+        self.fig.set_roles(self.diag_priors, FigureRoleEnum.DIAGRAMPRIOR)
         diag_panels = self.complete_structures()
-        return [Diagram(panel=panel, crop=panel.create_crop(self.fig)) for panel in diag_panels]
+        diags = [Diagram(panel=panel, crop=panel.create_crop(self.fig)) for panel in diag_panels]
+        self.diags = diags
+        return self.diags
+
+    @property
+    def extracted(self):
+        return self.diags
+
+    def plot_extracted(self, ax):
+        """Adds extracted panels onto a canvas of ``ax``"""
+        if not self.extracted:
+            pass
+        else:
+            for panel in self.extracted:
+                rect_bbox = Rectangle((panel.left, panel.top), panel.right - panel.left, panel.bottom - panel.top,
+                                      facecolor=(52/255, 0, 103/255), edgecolor=(6/255, 0, 99/255), alpha=0.4)
+                ax.add_patch(rect_bbox)
 
     def complete_structures(self):
         """
