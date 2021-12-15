@@ -2,7 +2,7 @@
 Arrow segmentation test.
 """
 from reactiondataextractor.actions import estimate_single_bond
-from reactiondataextractor.extractors.arrows import SolidArrowExtractor, CurlyArrowExtractor, ArrowExtractor
+from reactiondataextractor.extractors.arrows import SolidArrowCandidateExtractor, CurlyArrowCandidateExtractor, ArrowExtractor
 from reactiondataextractor.models.segments import Panel, Point
 # from models.utils import imread
 from reactiondataextractor.processors import ImageReader, EdgeExtractor
@@ -15,7 +15,7 @@ solid_fig = binarizer.process()
 # solid_fig = imread('rde_test.png')
 # settings.main_figure.append(solid_fig)
 estimate_single_bond(solid_fig)
-extractor = SolidArrowExtractor(solid_fig, )
+extractor = SolidArrowCandidateExtractor(solid_fig, )
 solid_arrows = extractor.extract()
 
 
@@ -25,7 +25,7 @@ curly_fig = reader.process()
 binarizer = EdgeExtractor(curly_fig)
 curly_fig = binarizer.process()
 
-curly_extractor = CurlyArrowExtractor(curly_fig)
+curly_extractor = CurlyArrowCandidateExtractor(curly_fig)
 curly_arrows = curly_extractor.extract()
 total_arrow_extractor = ArrowExtractor(curly_fig)
 total_arrow_extractor.extract()
