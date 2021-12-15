@@ -120,10 +120,19 @@ class ArrowExtractor(BaseExtractor):
         arrow_classes = self.arrow_classifier.predict(arrow_crops[..., np.newaxis])
         arrow_classes = np.argmax(arrow_classes, axis=1)
         # filtered_arrows = arrows[inliers]
-        arrows = [self.instantiate_arrow(arrow, cls_idx) for arrow, cls_idx in zip(arrows, arrow_classes)]
-        self.fig.set_roles([a.panel for a in arrows], FigureRoleEnum.ARROW)
+        completed_arrows = []
+        final_classes = []
+        for arrow, cls_idx in zip(arrows, arrow_classes):
+            try:
+                a = self.instantiate_arrow(arrow, cls_idx)
+                completed_arrows.append(a)
+                final_classes.append(cls_idx)
+            except ValueError:
+                log.info("Arrow was not instantiated - failed on eroding an arrow into its hook")
+        # arrows = [self.instantiate_arrow(arrow, cls_idx) for arrow, cls_idx in zip(arrows, arrow_classes)]
+        self.fig.set_roles([a.panel for a in completed_arrows], FigureRoleEnum.ARROW)
 
-        return self.separate_arrows(arrows)
+        return self.separate_arrows(completed_arrows)
 
     def preprocess_model_input(self, arrow):
         """Converts arrow objects into image arrays and resizes them to the desired input shape as required by the
@@ -211,7 +220,7 @@ class SolidArrowCandidateExtractor(BaseExtractor):
 
         arrow_candidates = []
         skeletonized = skeletonize(fig)
-        all_lines = cv2.HoughLinesP(skeletonized.img, rho=1, theta=np.pi/2,
+        all_lines = cv2.HoughLinesP(skeletonized.img, rho=1, theta=np.pi/180,
                                     threshold=ExtractorConfig.SOLID_ARROW_THRESHOLD,
                                     minLineLength=ExtractorConfig.SOLID_ARROW_MIN_LENGTH, maxLineGap=2)
 
@@ -225,8 +234,8 @@ class SolidArrowCandidateExtractor(BaseExtractor):
             parent_panel = [cc for cc in fig.connected_components if inrange(cc, p1) and inrange(cc, p2)][0]
 
             # Break the line down and check whether it's a single line
-            if not is_a_single_line(skeletonized, parent_panel, int(ExtractorConfig.SOLID_ARROW_MIN_LENGTH*0.5)):
-                continue
+            # if not is_a_single_line(skeletonized, parent_panel, int(ExtractorConfig.SOLID_ARROW_MIN_LENGTH*0.5)):
+            #     continue
 
             labelled_img, _ = label(img)
 
@@ -324,6 +333,7 @@ class BaseArrow(PanelMethodsMixin):
         self._center_px = None
         self.reference_pt = self.compute_reaction_reference_pt()
         self.initialize()
+        self.conditions = None # set dynamically by ConditionsExtractor
 
     @abc.abstractmethod
     def initialize(self):
@@ -351,7 +361,7 @@ class BaseArrow(PanelMethodsMixin):
         row, col = int(np.mean(rows)), int(np.mean(cols))
         row, col = arrow_crop.in_main_fig((row, col))
 
-        return row, col
+        return col, row  # x, y
 
 
     @property
