@@ -385,7 +385,7 @@ class ReactionScheme(Graph):
         distances = initial_distance, distance_fn
         extended_distances = extended_distance, distance_fn
         nearby_diags = find_nearby_ccs(arrow.panel, diags, distances)
-        print(nearby_diags)
+
         # reactants = find_nearby_ccs(react_endpoint, diags, distances,
         #                             condition=lambda diag: diag.panel.role != ReactionRoleEnum.CONDITIONS)
         reactants, products = self.separate_ccs(nearby_diags, react_endpoint, prod_endpoint)
@@ -420,6 +420,10 @@ class ReactionScheme(Graph):
             dists = [(idx, cc.edge_separation(pts[idx])) for idx in range(2)]
             min_idx = min(dists, key=lambda x: x[1])[0]
             clusters[min_idx].append(cc)
+        if any(c == [] for c in clusters):  # no reactants or products found
+            pass
+            # Come up with a solution - when such a situation happens? Anything other than when a scheme continues
+            # in the next line? Could use old version for this
 
         return clusters
 

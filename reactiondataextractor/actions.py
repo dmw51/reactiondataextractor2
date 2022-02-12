@@ -47,19 +47,28 @@ def estimate_single_bond(fig):
     ccs = fig.connected_components
     # Get a rough bond length (line length) value from the two largest structures
     ccs = sorted(ccs, key=lambda cc: cc.area, reverse=True)
-    estimation_fig = skeletonize(isolate_patches(fig, ccs[:2]))
-
-    length_scan_param = 0.025 * max(fig.width, fig.height)
-    length_scan_start = length_scan_param if length_scan_param > 20 else 20
-    min_line_lengths = np.linspace(length_scan_start, 3 * length_scan_start, 20)
-    num_lines = [(length, len(HoughLinesP(estimation_fig.img, rho=1, theta=np.pi/180, minLineLength=int(length), threshold=15)))
-                 for length in min_line_lengths]
+    estimation_fig = isolate_patches(fig, ccs[:2])
+    biggest_cc = ccs[0]
+    length_scan_param = 0.1 * min(biggest_cc.width, biggest_cc.height)
+    lines = HoughLinesP(estimation_fig.img, rho=1, theta=np.pi/180, minLineLength=int(length_scan_param), threshold=15)
+    lengths = []
+    for l in lines:
+        x1, y1, x2, y2 = l.squeeze()
+        x = x2 - x1
+        y = y2 - y1
+        length = np.sqrt(x**2 + y ** 2)
+        lengths.append(length)
+    single_bond = np.percentile(lengths, 85)
+    # length_scan_start = length_scan_param if length_scan_param > 50 else 50
+    # min_line_lengths = np.linspace(length_scan_start, 8 * length_scan_start, 100)
+    # num_lines = [(length, len(HoughLinesP(estimation_fig.img, rho=1, theta=np.pi/180, minLineLength=int(length), threshold=15)))
+                 # for length in min_line_lengths]
 
     # Choose the value where the number of lines starts to drop most rapidly and assign it as the ''single_bond''
-    (single_bond, _), (_, _) = min(zip(num_lines, num_lines[1:]), key=lambda pair: pair[1][1] - pair[0][1])
+    # (single_bond, _), (_, _) = min(zip(num_lines, num_lines[1:]), key=lambda pair: pair[1][1] - pair[0][1])
     # the key function is difference in number of detected lines between adjacent pairs
     # return int(single_bond)
-    config.ExtractorConfig.SOLID_ARROW_MIN_LENGTH = int(single_bond)
+    config.ExtractorConfig.SOLID_ARROW_MIN_LENGTH = int(single_bond//2)
     config.ExtractorConfig.SOLID_ARROW_THRESHOLD = int(single_bond//2)
 
 #
