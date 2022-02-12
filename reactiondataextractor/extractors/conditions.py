@@ -72,7 +72,7 @@ class ConditionsExtractor(BaseExtractor):
                 conditions.append(step_conditions)
                 cand.parent_panel.conditions = step_conditions
             else:
-                cand.parent_panel.conditions = Conditions({}, None)
+                cand.parent_panel.conditions = Conditions(conditions_dct={}, panel=None, parent_panel=cand.parent_panel)
             # conditions_structures.extend(step_structures)
         self._extracted = conditions#, conditions_structures
         return self.extracted

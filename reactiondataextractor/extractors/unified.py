@@ -2,50 +2,85 @@
 import copy
 
 import numpy as np
+import torch
+from detectron2.config import get_cfg
+cfg = get_cfg()
+cfg.MODEL.DEVICE = 'cpu'
+from detectron2.engine import DefaultPredictor
+from detectron2.checkpoint import DetectionCheckpointer
 from matplotlib.patches import Rectangle
 from scipy.stats import mode
+from detectron2 import model_zoo
+
 
 from .base import BaseExtractor, Candidate
 from .conditions import ConditionsExtractor
 # from .labels import LabelExtractor
 from .labels import LabelExtractor
 from ..config import ExtractorConfig
-from ..models.ml_models.unified_detection import RDEModel, RSchemeConfig
+# from ..models.ml_models.unified_detection import RDEModel, RSchemeConfig
 from ..models.reaction import Diagram, Conditions, Label
 from ..models.segments import Panel, Rect, FigureRoleEnum, Crop, PanelMethodsMixin
 from ..utils import skeletonize_area_ratio, dilate_fig
 
-
-
+###detectron2 config ###
+cfg = get_cfg()
+cfg.merge_from_file(model_zoo.get_config_file("COCO-Detection/faster_rcnn_X_101_32x8d_FPN_3x.yaml"))
+cfg.MODEL.DEVICE = 'cpu'
+cfg.DATASETS.TRAIN = ("artificial_data_train",)
+cfg.DATASETS.TEST = ("artificial_data_test",)
+cfg.DATALOADER.NUM_WORKERS = 0
+cfg.MODEL.WEIGHTS =ExtractorConfig.UNIFIED_EXTR_MODEL_WT_PATH
+    #model_zoo.get_checkpoint_url("COCO-Detection/faster_rcnn_X_101_32x8d_FPN_3x.yaml")  # Let training initialize from model zoo
+cfg.SOLVER.IMS_PER_BATCH = 4
+cfg.SOLVER.BASE_LR = 0.01  # pick a good LR
+cfg.SOLVER.MAX_ITER = 1000
+cfg.MODEL.ANCHOR_GENERATOR.SIZES=[[8,16 ], [16,32 ], [32,64 ], [64,128 ], [256,512 ]]
+cfg.SOLVER.STEPS = []        # do not decay learning rate
+cfg.MODEL.ROI_HEADS.BATCH_SIZE_PER_IMAGE = 256   # faster, and good enough for this toy dataset (default: 512)
+cfg.MODEL.ROI_HEADS.NUM_CLASSES = 3
+###
 
 class UnifiedExtractor(BaseExtractor):
 
     def __init__(self, fig, all_arrows):
         super().__init__(fig)
-        self.model = self.load_model(ExtractorConfig.UNIFIED_EXTR_MODEL_WT_PATH)
+        # self.model = self.load_model(ExtractorConfig.UNIFIED_EXTR_MODEL_WT_PATH)
+        self.model = DefaultPredictor(cfg)
+
+        # DetectionCheckpointer(self.model).load(ExtractorConfig.UNIFIED_EXTR_MODEL_WT_PATH)
+        # self.model.eval()
         self.all_arrows = all_arrows
         self.diagram_extractor = DiagramExtractor(self.fig,diag_priors=None)
         self.label_extractor = LabelExtractor(self.fig, priors=None)
         self.conditions_extractor = ConditionsExtractor(self.fig, priors=None)
 
 
+        # self._class_dict = {
+        #     1: Diagram,
+        #     2: Conditions,
+        #     3: Label
+        #
+        # }
+        ##torch
         self._class_dict = {
-            1: Diagram,
-            2: Conditions,
-            3: Label
+            0: Diagram,
+            1: Conditions,
+            2: Label
 
         }
 
-    def load_model(self, weights_path):
-        model_config = RSchemeConfig()
-        model = RDEModel(training=False, config=model_config)
-        primer_input = np.zeros(model_config.IMAGE_SHAPE)[np.newaxis, ...]
-        model([primer_input, np.zeros((1, 15))])
-        model.load_weights(weights_path)
-        return model
+    # def load_model(self, weights_path):
+    #     model_config = RSchemeConfig()
+    #     model = RDEModel(training=False, config=model_config)
+    #     primer_input = np.zeros(model_config.IMAGE_SHAPE)[np.newaxis, ...]
+    #     model([primer_input, np.zeros((1, 15))])
+    #     model.load_weights(weights_path)
+    #     return model
 
     def extract(self):
-        boxes, classes, scores = self.detect()
+        boxes, classes, scores = self.detect_detectron2()
+        boxes = self.adjust_coord_order_detectron(boxes)
         out_diag_bboxes = [box for box, class_ in zip(boxes, classes) if self._class_dict[class_] == Diagram]
         diag_priors = [self.select_diag_prior(bbox) for bbox in out_diag_bboxes]
         # diag_priors = [Panel(diag) for diag in diag_priors]
@@ -61,6 +96,16 @@ class UnifiedExtractor(BaseExtractor):
                               in zip([conditions, labels], [self.conditions_extractor, self.label_extractor])]
         return diags, conditions, labels
 
+    def adjust_coord_order_detectron(self, boxes):
+        """Adjusts order of coordinates to the expected format
+
+        Detectron outputs boxes with coordinates (x1, y1, x2, y2), however the expected
+        format is (top, left, bottom, right) i.e. (y1, x1, y2, x2). This function switches
+        the coordinates to achieve consistency"""
+        boxes = boxes[:, [1, 0, 3, 2]]
+        return boxes
+
+
     def plot_extracted(self, ax):
         self.diagram_extractor.plot_extracted(ax)
         self.label_extractor.plot_extracted(ax)
@@ -74,7 +119,23 @@ class UnifiedExtractor(BaseExtractor):
         else:
             img = self.fig.img
         img = (img - img.min()) / (img.max() - img.min())
-        return map(lambda x: x[0].numpy(), self.model.predict(img)) # Predicitions for first (and only) image in a batch
+        return map(lambda x: x[0].numpy(), self.model.predict(img)) # Predictions for first (and only) image in a batch
+
+    def detect_detectron2(self):
+        img = self.fig.img
+        with torch.no_grad():
+            predictions = self.model(img[..., np.newaxis])
+        #visualize predictions
+        # from detectron2.utils.visualizer import Visualizer
+        # import matplotlib.pyplot as plt
+        # vis = Visualizer(img)
+        # vis.draw_instance_predictions(predictions['instances'])
+        # plt.imshow(vis.output.get_image())
+        # plt.show()
+
+        predictions = predictions['instances']
+        return predictions.pred_boxes.tensor.numpy().astype(np.int32), predictions.pred_classes.numpy(), predictions.scores.numpy()
+
 
     def remove_duplicates(self, panels):
         """Removes duplicate panels inside `group`. In this context, duplicates are all panels which cover the same
@@ -146,7 +207,7 @@ class UnifiedExtractor(BaseExtractor):
             relevant_ccs = [crop.in_main_fig(cc) for cc in crop.connected_components]
             relevant_ccs = [cc for cc in relevant_ccs if cc.role is None]  # Previously unassigned ccs
             if relevant_ccs:
-                cand.panel = Panel.create_megarect(relevant_ccs)
+                cand.panel = Panel.create_megapanel(relevant_ccs, self.fig)
                 adjusted.append(cand)
         return adjusted
 
@@ -222,6 +283,7 @@ class DiagramExtractor(BaseExtractor):
         assert self.diag_priors is not None, "Diag priors have not been set"
         self.fig.dilation_iterations = self._find_optimal_dilation_extent()
         self.fig.set_roles(self.diag_priors, FigureRoleEnum.DIAGRAMPRIOR)
+        TODO Why are not diag_panels found? Is it to do with num_iterations / dilation etc?
         diag_panels = self.complete_structures()
         diags = [Diagram(panel=panel, crop=panel.create_crop(self.fig)) for panel in diag_panels]
         self.diags = diags
@@ -251,7 +313,7 @@ class DiagramExtractor(BaseExtractor):
         :return:bounding boxes of chemical structures
         :rtype: list
         """
-        fig = self.fig
+        # fig = self.fig
         # fig_no_arrows = erase_elements(fig, self.arrows)
         dilated_structure_panels, other_ccs = self.find_dilated_structures()
         structure_panels = self._complete_structures(dilated_structure_panels)
@@ -288,12 +350,12 @@ class DiagramExtractor(BaseExtractor):
         dilated_imgs = {}
 
         for diag in self.diag_priors:
-            ksize = fig.dilation_iterations[diag]
+            num_iterations = fig.dilation_iterations[diag]
             try:
-                dilated_temp = dilated_imgs[ksize] # use cached
+                dilated_temp = dilated_imgs[num_iterations] # use cached
             except KeyError:
-                dilated_temp = dilate_fig(fig, ksize)
-                dilated_imgs[ksize] = dilated_temp
+                dilated_temp = dilate_fig(fig, num_iterations)
+                dilated_imgs[num_iterations] = dilated_temp
 
             dilated_structure_panel = [cc for cc in dilated_temp.connected_components if cc.contains(diag)][0]
             # Crop around with a small extension to get the connected component correctly
@@ -351,8 +413,9 @@ class DiagramExtractor(BaseExtractor):
         for dilated_structure in dilated_structure_panels:
             constituent_ccs = [cc for cc in self.fig.connected_components if dilated_structure.contains(cc)
                                and cc.role not in disallowed_roles]
-            parent_structure_panel = Panel.create_megarect(constituent_ccs)
-            structure_panels.append(parent_structure_panel)
+            parent_structure_panel = Panel.create_megapanel(constituent_ccs, fig=self.fig)
+            if parent_structure_panel.area/self.fig.area < ExtractorConfig.DIAG_MAX_AREA_FRACTION:
+                structure_panels.append(parent_structure_panel)
         return structure_panels
 
 
@@ -371,16 +434,20 @@ class DiagramExtractor(BaseExtractor):
             for prior in self.diag_priors:
                 top, left, bottom, right = prior
                 horz_ext, vert_ext = prior.width // 2, prior.height // 2
+                horz_ext = max(horz_ext, ExtractorConfig.DIAG_MIN_EXT)
+                vert_ext = max(vert_ext, ExtractorConfig.DIAG_MIN_EXT)
+
                 crop_rect = Rect((top - vert_ext,left - horz_ext, bottom + vert_ext, right + horz_ext ))
                 p_ratio = skeletonize_area_ratio(self.fig, crop_rect)
+                # print(p_ratio)
                 # log.debug(f'found in-crop skel_pixel ratio: {p_ratio}')
 
-                if p_ratio >= 0.02:
+                if p_ratio >= 0.03:
                     n_iterations = 4
                 elif 0.01 < p_ratio < 0.02:
-                    n_iterations = np.ceil(12 - 400 * p_ratio)
+                    n_iterations = np.ceil(18 - 600 * p_ratio)
                 else:
-                    n_iterations = 8
+                    n_iterations = 12
                 num_iterations[prior] = n_iterations
 
             return num_iterations

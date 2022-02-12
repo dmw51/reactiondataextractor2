@@ -14,19 +14,22 @@ from operator import itemgetter
 
 import cv2
 import numpy as np
+import torch
 from matplotlib.patches import Rectangle
 from scipy.ndimage import label
-from tensorflow.keras.models import load_model
-
+# from tensorflow.keras.models import load_model
+from torch import load, device
 from reactiondataextractor.config import ExtractorConfig, Config
 from reactiondataextractor.extractors.base import BaseExtractor, Candidate
 from reactiondataextractor.models.exceptions import NotAnArrowException
-from reactiondataextractor.models.segments import FigureRoleEnum, PanelMethodsMixin, Panel
+from reactiondataextractor.models.segments import FigureRoleEnum, PanelMethodsMixin, Panel, Figure
 from reactiondataextractor.utils import skeletonize, is_a_single_line
 from reactiondataextractor.models.geometry import Point, Line
 from reactiondataextractor.processors import Isolator, EdgeExtractor
 
 log = logging.getLogger('arrows')
+
+
 
 class ArrowExtractor(BaseExtractor):
 
@@ -35,9 +38,13 @@ class ArrowExtractor(BaseExtractor):
         self.solid_arrow_extractor = SolidArrowCandidateExtractor(fig)
         self.curly_arrow_extractor = CurlyArrowCandidateExtractor(fig)
 
-        self.arrow_detector = load_model(ExtractorConfig.ARROW_DETECTOR_PATH)
-        self.arrow_classifier = load_model(ExtractorConfig.ARROW_CLASSIFIER_PATH)
+        # self.arrow_detector = load_model(ExtractorConfig.ARROW_DETECTOR_PATH)
+        # self.arrow_classifier = load_model(ExtractorConfig.ARROW_CLASSIFIER_PATH)
 
+        self.arrow_detector = load(ExtractorConfig.ARROW_DETECTOR_PATH, map_location=device('cpu'))
+        self.arrow_detector.eval()
+        self.arrow_classifier = load(ExtractorConfig.ARROW_CLASSIFIER_PATH, map_location=device('cpu'))
+        self.arrow_classifier.eval()
         self.arrows = None
         self._class_dict = {0: SolidArrow,
                             1: EquilibriumArrow,
@@ -85,12 +92,12 @@ class ArrowExtractor(BaseExtractor):
 
 
     def remove_duplicates(self, arrow_candidates):
-        def is_different_px(px1, px2):
-            return px1[0] != px2[0] and px1[1] != px2[1]
+        """Removes duplicate arrow candidates based on their panel intersection over union (IoU) metric"""
+
 
         filtered = []
         for cand in arrow_candidates:
-            if all(is_different_px(cand.pixels[0], filtered_arrow.pixels[1]) for filtered_arrow in filtered):
+            if all(cand.panel.compute_iou(other_cand.panel) < 0.9 for other_cand in filtered):
                 filtered.append(cand)
 
         return filtered
@@ -98,9 +105,12 @@ class ArrowExtractor(BaseExtractor):
     def filter_false_positives(self, arrows):
         arrow_crops = [self.preprocess_model_input(arrow) for arrow in arrows]
         arrow_crops = np.stack(arrow_crops, axis=0)
-        arrows_pred = self.arrow_detector.predict(x=arrow_crops).squeeze()
+        # arrows_pred = self.arrow_detector.predict(x=arrow_crops).squeeze()
+        #torch syntax below
+        with torch.no_grad():
+            arrows_pred = self.arrow_detector(torch.tensor(arrow_crops)).numpy()
         arrows_pred = arrows_pred > ExtractorConfig.ARROW_DETECTOR_THRESH
-        inliers = np.argwhere(arrows_pred == True).squeeze(axis=1)
+        inliers = np.argwhere(arrows_pred == True)[:,0]
         arrows = [arrows[idx] for idx in inliers]
         return arrows
         # solid_arrows = []
@@ -117,7 +127,10 @@ class ArrowExtractor(BaseExtractor):
         arrow_crops = [self.preprocess_model_input(arrow) for arrow in arrows]
         arrow_crops = np.stack(arrow_crops, axis=0)
 
-        arrow_classes = self.arrow_classifier.predict(arrow_crops[..., np.newaxis])
+        # arrow_classes = self.arrow_classifier.predict(arrow_crops[..., np.newaxis])
+        #torch below
+        with torch.no_grad():
+            arrow_classes = self.arrow_classifier(torch.tensor(arrow_crops)).numpy()
         arrow_classes = np.argmax(arrow_classes, axis=1)
         # filtered_arrows = arrows[inliers]
         completed_arrows = []
@@ -148,25 +161,35 @@ class ArrowExtractor(BaseExtractor):
                 img = (img - min_) / (max_ - min_)
             return img
 
-        isolated_arrow_fig = Isolator(self.fig, arrow, isolate_mask=True).process()
-        arrow_crop = arrow.panel.create_crop(isolated_arrow_fig)
-        arrow_crop = arrow_crop.resize( ExtractorConfig.ARROW_IMG_SHAPE)
+        arrow_crop = self.crop_from_raw_img(arrow)
+
+        arrow_crop = arrow_crop.resize((self.fig.raw_img.shape[1], self.fig.raw_img.shape[0]))
+
+        arrow_crop = arrow_crop.resize(ExtractorConfig.ARROW_IMG_SHAPE)
         arrow_crop = np.pad(arrow_crop.img, ((2, 2), (2, 2)))
         arrow_crop = cv2.resize(arrow_crop, ExtractorConfig.ARROW_IMG_SHAPE)
         arrow_crop = min_max_rescale(arrow_crop)
+        #torch preprocess below
+        arrow_crop = arrow_crop[np.newaxis, ...].astype(np.float32)
 
-        # _, arrow_crop = cv2.threshold(arrow_crop, 40, 255, cv2.THRESH_BINARY)
-        # binarised = EdgeExtractor(arrow_crop, bin_thresh=[20, 255]).process()
-        # arrow_crop = binarised.img
 
-        # arrow_crop = (arrow_crop - arrow_crop.min())/(arrow_crop.max() - arrow_crop.min())
-        # arrow_vector = scaler.fit_transform(arrow_vector)
-        # arrow_crop = arrow_vector.reshape((arrow_crop.shape))
-
-        # arrow_crop = self.rotate_arrow(arrow_crop.img)
-
-        # arrow_vector = np.reshape(arrow_crop, -1)
         return arrow_crop
+
+    def crop_from_raw_img(self, arrow):
+        # isolated_arrow_fig = Isolator(self.fig, arrow, isolate_mask=True).process()
+        # arrow_crop = arrow.panel.create_crop(isolated_arrow_fig)
+        if self.fig.scaling_factor:
+            raw_img = cv2.resize(self.fig.raw_img, (self.fig.img.shape[1], self.fig.img.shape[0]))
+            # arrow_panel = list(map(lambda coord: coord * self.fig.scaling_factor))
+        else:
+            raw_img = self.fig.raw_img
+        dummy_fig = Figure(img=raw_img, raw_img=raw_img)
+        isolated_raw_arrow = Isolator(dummy_fig, arrow, isolate_mask=True).process()
+        raw_arrow_crop = arrow.panel.create_crop(isolated_raw_arrow)
+        return raw_arrow_crop
+
+
+
 
     def instantiate_arrow(self, arrow_candidate, cls_idx):
         return self._class_dict[cls_idx](**arrow_candidate.pass_attributes())
@@ -196,7 +219,8 @@ class SolidArrowCandidateExtractor(BaseExtractor):
         super().__init__(fig)
 
     def extract(self):
-        return self.find_solid_arrows()
+        self.arrows = self.find_solid_arrows()
+        return self.arrows
 
 
     @property
@@ -220,22 +244,23 @@ class SolidArrowCandidateExtractor(BaseExtractor):
 
         arrow_candidates = []
         skeletonized = skeletonize(fig)
-        all_lines = cv2.HoughLinesP(skeletonized.img, rho=1, theta=np.pi/180,
+        all_lines = cv2.HoughLinesP(skeletonized.img, rho=1, theta=np.pi/360,
                                     threshold=ExtractorConfig.SOLID_ARROW_THRESHOLD,
-                                    minLineLength=ExtractorConfig.SOLID_ARROW_MIN_LENGTH, maxLineGap=2)
-
+                                    minLineLength=ExtractorConfig.SOLID_ARROW_MIN_LENGTH, maxLineGap=5)
+    # TODO: Fix this Hough Transform (to find optimal number of candidates). Check exactly which arrows were found (visualize)
         for line in all_lines:
             x1, y1, x2, y2 = line.squeeze()
             # points = [Point(row=y, col=x) for x, y in line]
             # Choose one of points to find the label and pixels in the image
             p1, p2 = Point(row=y1, col=x1), Point(row=y2, col=x2)
 
-
-            parent_panel = [cc for cc in fig.connected_components if inrange(cc, p1) and inrange(cc, p2)][0]
-
+            try:
+                parent_panel = [cc for cc in fig.connected_components if inrange(cc, p1) and inrange(cc, p2)][0]
+            except IndexError:
+                continue  # Line crossing multiple connected components found
             # Break the line down and check whether it's a single line
-            # if not is_a_single_line(skeletonized, parent_panel, int(ExtractorConfig.SOLID_ARROW_MIN_LENGTH*0.5)):
-            #     continue
+            if not is_a_single_line(skeletonized, parent_panel, int(ExtractorConfig.SOLID_ARROW_MIN_LENGTH*0.5)):
+                continue
 
             labelled_img, _ = label(img)
 
@@ -246,7 +271,7 @@ class SolidArrowCandidateExtractor(BaseExtractor):
             panel_left, panel_right = np.min(arrow_pixels[:, 1]), np.max(arrow_pixels[:, 1])+1
 
             arrow_candidates.append(ArrowCandidate(arrow_pixels,
-                                               panel=Panel((panel_top, panel_left, panel_bottom, panel_right))))
+                                               panel=parent_panel))
         return arrow_candidates
 
     def plot_extracted(self, ax):
@@ -294,7 +319,7 @@ class CurlyArrowCandidateExtractor(BaseExtractor):
                 cv2.drawContours(mask, [cnt], 0, 255, -1)
                 pixels = np.transpose(np.nonzero(mask))
                 top, left, bottom, right = y, x, y + h, x + w
-                arrow_cand = ArrowCandidate(pixels, contour=cnt, panel=Panel((top, left, bottom, right)))
+                arrow_cand = ArrowCandidate(pixels, contour=cnt, panel=Panel((top, left, bottom, right), Config.FIGURE))
                 # arrow = CurlyArrow(pixels, Panel((top, left, bottom, right)), cnt)
 
 
