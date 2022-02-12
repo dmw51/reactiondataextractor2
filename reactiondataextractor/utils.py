@@ -151,16 +151,22 @@ def binary_floodfill(fig):
     return fig
 
 
-def pixel_ratio(fig, diag):
-    """ Calculates the ratio of 'on' pixels to bounding box area for binary figure
+def pixel_ratio(fig, rect):
+    """ Calculates the ratio of 'on' pixels to bounding box area for a rectangular patch of `fig` bounded by `rect`.
+    if the bounding box exceeds boundary of `fig`, then area outside of `fig` is treated as if it was background (values
+    of 0)
     :param fig : Input binary Figure
     :param diag : Area to calculate pixel ratio
     :return ratio: Float detailing ('on' pixels / bounding box area)
     """
-    cropped_img = crop_rect(fig.img, diag)
+     # TODO: Adjust for panels extending beyond image boundary (pad with background pixels)
+
+    cropped_img = crop_rect(fig.img, rect)
+
     cropped_img = cropped_img['img']
+
     ones = np.count_nonzero(cropped_img)
-    all_pixels = np.size(cropped_img)
+    all_pixels = rect.area
     ratio = ones / all_pixels
     return ratio
 
@@ -230,15 +236,16 @@ def erase_elements(fig, elements):
     return new_fig
 
 
-def dilate_fig(fig, kernel_size):
+def dilate_fig(fig, num_iterations):
     """
-    Applies binary dilation to `fig.img` using a disk-shaped structuring element of size ''dilation_iterations''.
+    Applies binary dilation to `fig.img` using a disk-shaped (3, 3) structuring element ``num_iterations`` times .
     :param Figure fig: Processed figure
-    :param int kernel_size: size of the structuring element
+    :param int num_iterations: number of iterations for dilation
     :return Figure: new Figure object
     """
     # selem = disk(kernel_size)
-    return Figure(cv2.dilate(fig.img, None, iterations=int(kernel_size)), raw_img=fig.raw_img)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    return Figure(cv2.dilate(fig.img, kernel, iterations=int(num_iterations)), raw_img=fig.raw_img)
     # return Figure(binary_dilation(fig.img, selem), raw_img=fig.raw_img)
 
 
@@ -489,8 +496,10 @@ def skeletonize(fig):
     """
 
     img = cv2.ximgproc.thinning(fig.img)
+    fig_copy = copy.deepcopy(fig)
+    fig_copy.img = img
 
-    return Figure(img, raw_img=fig.raw_img)
+    return fig_copy
 
 
 def skeletonize_area_ratio(fig, panel):

@@ -1,4 +1,5 @@
 import os
+from copy import deepcopy
 from enum import Enum, auto
 from abc import ABC, abstractmethod
 import imageio as imageio
@@ -7,6 +8,7 @@ import numpy as np
 import cv2
 from scipy.stats import mode
 
+from .config import ProcessorConfig
 from .models.segments import Rect, Figure
 from . import config
 
@@ -64,11 +66,10 @@ class ImageReader(Processor):
             img = self._convert_gif(img)
 
             # img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        raw_img = img
         bg_value = mode(img.ravel())[0][0]
         if bg_value in range(250, 256):
             img = np.invert(img)
-        self.fig = Figure(img=img, raw_img=raw_img)
+        self.fig = Figure(img=img, raw_img=img)  # Important that all used imgs have bg value 0 hence raw_img==img
         return self.fig
 
     def _convert_gif(self, img):
@@ -84,6 +85,32 @@ class ImageReader(Processor):
             elif len(img.shape) == 2:  #Gray
                 img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
             return img
+
+class ImageScaler(Processor):
+
+    def __init__(self, fig, resize_min_dim_to, enabled=True):
+
+        self.resize_min_dim_to = resize_min_dim_to
+        super().__init__(fig=fig, enabled=enabled)
+
+    def process(self):
+        min_dim = min(self.fig.img.shape)
+        y_dim, x_dim = self.fig.img.shape
+        scaling_factor = self.resize_min_dim_to/min_dim
+        img = cv2.resize(self.fig.img, (int(x_dim*scaling_factor), int(y_dim*scaling_factor)))
+        self.fig._scaling_factor = scaling_factor
+        self.fig.img = img
+        return self.fig
+
+class ImageNormaliser(Processor):
+    def __init__(self, fig, enabled=True):
+        super().__init__(fig=fig, enabled=enabled)
+
+    def process(self):
+        img = self.fig.img
+        img = ((img - img.min()) / (img.max() - img.min()) * 255).astype(np.uint8)
+        self.fig.img = img
+        return self.fig
 
 class TextLineRemover(Processor):
     WIDTH_THRESH_FACTOR = 0.3
@@ -152,12 +179,16 @@ class EdgeExtractor(Processor):
             #TODO: Make sure the background is consistent - this makes contour search reliable
             ## bg should be 0
 
-            ret, thresh = cv2.threshold(self.img, *self.bin_thresh, cv2.THRESH_BINARY)
-            return Figure(thresh, raw_img=self.img)
+            ret, img = cv2.threshold(self.img, *self.bin_thresh, cv2.THRESH_BINARY)
+            fig_copy = deepcopy(self.fig)
+            fig_copy.img = img
+            return fig_copy
         elif self.color_mode == self.COLOR_MODE.RGB:
 
             img = cv2.GaussianBlur(self.img, (3, 3), 1)
-            return cv2.Canny(img, *config.ProcessorConfig.CANNY_THRESH)
+            fig_copy = deepcopy(self.fig)
+            fig_copy.img = img
+            return fig_copy
 
 
 class Isolator(Processor):
@@ -167,17 +198,32 @@ class Isolator(Processor):
         self.to_isolate = to_isolate
         self.isolate_mask = isolate_mask
 
+
     def _isolate_panel(self):
         #TODO
         pass
 
     def _isolate_mask(self):
         rows, cols = zip(*self.to_isolate.pixels)
-        mask = np.zeros_like(self.fig.img, dtype=np.bool)
-        isolated = np.zeros_like(self.fig.img, dtype=np.uint8)
+        # if self.use_raw_img:
+        #     img = self.fig.raw_img
+        # else:
+        #     img = self.fig.img
+        mask = np.zeros_like(self.img, dtype=np.bool)
         mask[rows, cols] = True
-        isolated[mask] = self.fig.img[mask]
-        return Figure(img=isolated, raw_img=self.fig.img)
+        isolated_cc_img = np.zeros_like(self.img, dtype=np.uint8)
+        isolated_cc_img[mask] = self.img[mask]
+        # if self.fig.scaling_factor:
+        #     y_dim, x_dim = img.shape
+        #     isolated_cc_img_resized = cv2.resize(isolated_cc_img_resized, (x_dim, y_dim))
+        # rows, cols = np.where(isolated_cc_img_resized > 0)
+        # mask = np.zeros_like(img, dtype=np.bool)
+        # mask[rows, cols] = True
+        # isolated_cc_img_orig = np.zeros_like(img)
+        # isolated_cc_img_orig[mask] = img[mask]
+        fig_copy = deepcopy(self.fig)
+        fig_copy.img = isolated_cc_img
+        return fig_copy
 
     def process(self):
         if self.isolate_mask:

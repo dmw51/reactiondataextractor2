@@ -35,8 +35,8 @@ import warnings
 import numpy as np
 from PIL import Image, ImageEnhance
 import tesserocr
-from skimage import img_as_ubyte, img_as_uint
-from skimage.filters import gaussian
+# from skimage import img_as_ubyte, img_as_uint
+# from skimage.filters import gaussian
 from scipy import stats
 
 # from chemdataextractor.doc.text import Sentence
@@ -229,56 +229,56 @@ def pil_enhance(image_path):
 #     conditions_region = isolated_block.get_bounding_box()
 #     return read_conditions(fig, conditions_region)
 
-def img_as_pil(arr, format_str=None):
-    """Convert an scikit-image image (ndarray) to a PIL object.
-
-    Derived from code in scikit-image PIL IO plugin.
-
-    :param numpy.ndarray raw_img: The image to convert.
-    :return: PIL image.
-    :rtype: Image
-    """
-    if arr.ndim == 3:
-        arr = img_as_ubyte(arr)
-        mode = {3: 'RGB', 4: 'RGBA'}[arr.shape[2]]
-
-    elif format_str in ['png', 'PNG']:
-        mode = 'I;16'
-        mode_base = 'I'
-
-        if arr.dtype.kind == 'f':
-            arr = img_as_uint(arr)
-
-        elif arr.max() < 256 and arr.min() >= 0:
-            arr = arr.astype(np.uint8)
-            mode = mode_base = 'L'
-
-        else:
-            arr = img_as_uint(arr)
-
-    else:
-        arr = img_as_ubyte(arr)
-        mode = 'L'
-        mode_base = 'L'
-
-    try:
-        array_buffer = arr.tobytes()
-    except AttributeError:
-        array_buffer = arr.tostring()  # Numpy < 1.9
-
-    if arr.ndim == 2:
-        im = Image.new(mode_base, arr.T.shape)
-        try:
-            im.frombytes(array_buffer, 'raw', mode)
-        except AttributeError:
-            im.fromstring(array_buffer, 'raw', mode)  # PIL 1.1.7
-    else:
-        image_shape = (arr.shape[1], arr.shape[0])
-        try:
-            im = Image.frombytes(mode, image_shape, array_buffer)
-        except AttributeError:
-            im = Image.fromstring(mode, image_shape, array_buffer)  # PIL 1.1.7
-    return im
+# def img_as_pil(arr, format_str=None):
+#     """Convert an scikit-image image (ndarray) to a PIL object.
+#
+#     Derived from code in scikit-image PIL IO plugin.
+#
+#     :param numpy.ndarray raw_img: The image to convert.
+#     :return: PIL image.
+#     :rtype: Image
+#     """
+#     if arr.ndim == 3:
+#         arr = img_as_ubyte(arr)
+#         mode = {3: 'RGB', 4: 'RGBA'}[arr.shape[2]]
+#
+#     elif format_str in ['png', 'PNG']:
+#         mode = 'I;16'
+#         mode_base = 'I'
+#
+#         if arr.dtype.kind == 'f':
+#             arr = img_as_uint(arr)
+#
+#         elif arr.max() < 256 and arr.min() >= 0:
+#             arr = arr.astype(np.uint8)
+#             mode = mode_base = 'L'
+#
+#         else:
+#             arr = img_as_uint(arr)
+#
+#     else:
+#         arr = img_as_ubyte(arr)
+#         mode = 'L'
+#         mode_base = 'L'
+#
+#     try:
+#         array_buffer = arr.tobytes()
+#     except AttributeError:
+#         array_buffer = arr.tostring()  # Numpy < 1.9
+#
+#     if arr.ndim == 2:
+#         im = Image.new(mode_base, arr.T.shape)
+#         try:
+#             im.frombytes(array_buffer, 'raw', mode)
+#         except AttributeError:
+#             im.fromstring(array_buffer, 'raw', mode)  # PIL 1.1.7
+#     else:
+#         image_shape = (arr.shape[1], arr.shape[0])
+#         try:
+#             im = Image.frombytes(mode, image_shape, array_buffer)
+#         except AttributeError:
+#             im = Image.fromstring(mode, image_shape, array_buffer)  # PIL 1.1.7
+#     return im
 
 
 # These enums just wrap tesserocr functionality, so we can return proper enum members instead of ints.
