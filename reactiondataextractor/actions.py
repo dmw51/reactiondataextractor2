@@ -47,7 +47,7 @@ def estimate_single_bond(fig):
     ccs = fig.connected_components
     # Get a rough bond length (line length) value from the two largest structures
     ccs = sorted(ccs, key=lambda cc: cc.area, reverse=True)
-    estimation_fig = isolate_patches(fig, ccs[:2])
+    estimation_fig = isolate_patches(fig, ccs[:3])
     biggest_cc = ccs[0]
     length_scan_param = 0.1 * min(biggest_cc.width, biggest_cc.height)
     lines = HoughLinesP(estimation_fig.img, rho=1, theta=np.pi/180, minLineLength=int(length_scan_param), threshold=15)
@@ -58,7 +58,7 @@ def estimate_single_bond(fig):
         y = y2 - y1
         length = np.sqrt(x**2 + y ** 2)
         lengths.append(length)
-    single_bond = np.percentile(lengths, 85)
+    single_bond = np.percentile(lengths, 80)
     # length_scan_start = length_scan_param if length_scan_param > 50 else 50
     # min_line_lengths = np.linspace(length_scan_start, 8 * length_scan_start, 100)
     # num_lines = [(length, len(HoughLinesP(estimation_fig.img, rho=1, theta=np.pi/180, minLineLength=int(length), threshold=15)))

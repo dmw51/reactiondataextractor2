@@ -42,8 +42,8 @@ class Processor(ABC, GlobalFigureMixin):
 
 class ImageReader(Processor):
 
-
     def __init__(self, filepath, color_mode):
+        config.Config.IMG_PATH = filepath
         assert color_mode in self.COLOR_MODE, "Color_mode must be one of ImageColor.COLORMODE enum members"
         assert os.path.exists(filepath), "Could not open file - Invalid path was entered"
         self.filepath = filepath
@@ -55,36 +55,56 @@ class ImageReader(Processor):
 
         if self.color_mode == self.COLOR_MODE.GRAY:
             img = cv2.imread(self.filepath, cv2.IMREAD_GRAYSCALE)
-
+            img_detectron = cv2.imread(self.filepath)
         elif self.color_mode == self.COLOR_MODE.RGB:
             img = cv2.imread(self.filepath, cv2.IMREAD_COLOR)
             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            img_detectron = cv2.imread(self.filepath)
 
         if img is None and self.ext == '.gif':   # Ensure this special case is treated
             img = imageio.mimread(self.filepath)
             img = img[0]
-            img = self._convert_gif(img)
+            # img_detectron = img
+            # img_detectron = cv2.cvtColor(img_detectron, cv2.COLOR_GRAY2BGR)
+            img, img_detectron = self._convert_gif(img)
 
             # img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        bg_value = mode(img.ravel())[0][0]
-        if bg_value in range(250, 256):
-            img = np.invert(img)
-        self.fig = Figure(img=img, raw_img=img)  # Important that all used imgs have bg value 0 hence raw_img==img
+        img = self.adjust_bg_value(img)
+        img_detectron = self.adjust_bg_value(img_detectron, desired=255)
+         # TODO: Investigate the bg conversion - make sure detectron image has the same bg value as the training data (is it 1/255? and not 0?)
+        self.fig = Figure(img=img, raw_img=img, img_detectron=img_detectron)  # Important that all used imgs have bg value 0 hence raw_img==img
         return self.fig
 
     def _convert_gif(self, img):
+        img_detectron = img
+        if len(img_detectron.shape) == 2:
+            img_detectron = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR )
+        elif len(img.shape) == 3 and img.shape[-1] == 4:  # RGBA
+            img_detectron = cv2.cvtColor(img, cv2.COLOR_RGBA2BGR)
+
         if self.color_mode == self.COLOR_MODE.GRAY:
             if len(img.shape) == 3 and img.shape[-1] == 4:  # RGBA
                 img = cv2.cvtColor(img, cv2.COLOR_RGBA2GRAY )
             elif len(img.shape) == 3 and img.shape[-1] == 3:  # RGB
                 img = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
-            return img
         elif self.color_mode == self.COLOR_MODE.RGB:
             if len(img.shape) == 3 and img.shape[-1] == 4:  # RGBA
                 img = cv2.cvtColor(img, cv2.COLOR_RGBA2RGB )
             elif len(img.shape) == 2:  #Gray
                 img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
-            return img
+
+        return img, img_detectron
+
+    def adjust_bg_value(self, img, desired=0):
+        bg_value = mode(img.ravel())[0][0]
+
+        if desired == 0:
+            if bg_value in range(250, 256):
+                img = np.invert(img)
+        elif desired == 255:
+            if bg_value in range(0, 10):
+                img = np.invert(img)
+        return img
 
 class ImageScaler(Processor):
 

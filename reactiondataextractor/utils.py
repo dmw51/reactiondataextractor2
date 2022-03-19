@@ -519,4 +519,26 @@ def mark_tiny_ccs(fig):
      cc.area < np.percentile([cc.area for cc in fig.connected_components], 4) and cc.role is None]
 
 
+def find_relative_directional_position(point1, point2):
+    """Finds relative directional position between two points defined at the angle between +ve y-axis and the line
+    defined by the two points.
 
+    The direction is recovered from a dot product between the unit vector in the y axis and the vector defined by the
+    two points"""
+
+    v = point2[0] - point1[0], point2[1] - point1[1]
+    j = (0, 1)  # (x, y) expected
+    l_v = np.sqrt((v[0]**2 + v[1]**2))
+    theta = np.arccos(np.dot(v, j)/(l_v * 1))
+    theta = theta * 180 / np.pi
+    return theta
+
+def find_points_on_line(p0, t, distance):
+    """Finds points on a line defined by point p0 and direction vector t, separated from p0 by a distance `distance`"""
+
+    ## Any vector lying on a line defined by (p0, t0 can be described as p1 = p0 + at, where a is a real number
+    ## for a given distance `distance` from p0, the two coefficients (There are two equidistant pts a1 and a2
+    # are derived as
+    a = distance / np.sqrt(np.sum(t[0]**2 + t[1]**2))
+
+    return p0 + a * t, p0 - a * t

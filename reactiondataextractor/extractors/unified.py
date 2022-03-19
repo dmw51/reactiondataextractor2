@@ -1,13 +1,20 @@
 """This module contains all parts of the unified extractor for diagrams, labels and reaction conditions"""
 import copy
+from itertools import product
+from math import ceil
 
+import cv2
 import numpy as np
 import torch
 from detectron2.config import get_cfg
+from torch import Tensor
+
 cfg = get_cfg()
 cfg.MODEL.DEVICE = 'cpu'
 from detectron2.engine import DefaultPredictor
 from detectron2.checkpoint import DetectionCheckpointer
+from detectron2.structures.instances import  Instances
+from detectron2.structures.boxes import Boxes
 from matplotlib.patches import Rectangle
 from scipy.stats import mode
 from detectron2 import model_zoo
@@ -17,41 +24,25 @@ from .base import BaseExtractor, Candidate
 from .conditions import ConditionsExtractor
 # from .labels import LabelExtractor
 from .labels import LabelExtractor
-from ..config import ExtractorConfig
+from ..config import ExtractorConfig, Config
 # from ..models.ml_models.unified_detection import RDEModel, RSchemeConfig
 from ..models.reaction import Diagram, Conditions, Label
 from ..models.segments import Panel, Rect, FigureRoleEnum, Crop, PanelMethodsMixin
-from ..utils import skeletonize_area_ratio, dilate_fig
+from ..utils import skeletonize_area_ratio, dilate_fig, erase_elements, find_relative_directional_position, \
+    find_points_on_line
 
-###detectron2 config ###
-cfg = get_cfg()
-cfg.merge_from_file(model_zoo.get_config_file("COCO-Detection/faster_rcnn_X_101_32x8d_FPN_3x.yaml"))
-cfg.MODEL.DEVICE = 'cpu'
-cfg.DATASETS.TRAIN = ("artificial_data_train",)
-cfg.DATASETS.TEST = ("artificial_data_test",)
-cfg.DATALOADER.NUM_WORKERS = 0
-cfg.MODEL.WEIGHTS =ExtractorConfig.UNIFIED_EXTR_MODEL_WT_PATH
-    #model_zoo.get_checkpoint_url("COCO-Detection/faster_rcnn_X_101_32x8d_FPN_3x.yaml")  # Let training initialize from model zoo
-cfg.SOLVER.IMS_PER_BATCH = 4
-cfg.SOLVER.BASE_LR = 0.01  # pick a good LR
-cfg.SOLVER.MAX_ITER = 1000
-cfg.MODEL.ANCHOR_GENERATOR.SIZES=[[8,16 ], [16,32 ], [32,64 ], [64,128 ], [256,512 ]]
-cfg.SOLVER.STEPS = []        # do not decay learning rate
-cfg.MODEL.ROI_HEADS.BATCH_SIZE_PER_IMAGE = 256   # faster, and good enough for this toy dataset (default: 512)
-cfg.MODEL.ROI_HEADS.NUM_CLASSES = 3
-###
 
 class UnifiedExtractor(BaseExtractor):
 
     def __init__(self, fig, all_arrows):
         super().__init__(fig)
         # self.model = self.load_model(ExtractorConfig.UNIFIED_EXTR_MODEL_WT_PATH)
-        self.model = DefaultPredictor(cfg)
+        self.model = Detectron2Adapter(fig)
 
         # DetectionCheckpointer(self.model).load(ExtractorConfig.UNIFIED_EXTR_MODEL_WT_PATH)
         # self.model.eval()
         self.all_arrows = all_arrows
-        self.diagram_extractor = DiagramExtractor(self.fig,diag_priors=None)
+        self.diagram_extractor = DiagramExtractor(self.fig,diag_priors=None, arrows=self.all_arrows)
         self.label_extractor = LabelExtractor(self.fig, priors=None)
         self.conditions_extractor = ConditionsExtractor(self.fig, priors=None)
 
@@ -70,22 +61,21 @@ class UnifiedExtractor(BaseExtractor):
 
         }
 
-    # def load_model(self, weights_path):
-    #     model_config = RSchemeConfig()
-    #     model = RDEModel(training=False, config=model_config)
-    #     primer_input = np.zeros(model_config.IMAGE_SHAPE)[np.newaxis, ...]
-    #     model([primer_input, np.zeros((1, 15))])
-    #     model.load_weights(weights_path)
-    #     return model
-
     def extract(self):
-        boxes, classes, scores = self.detect_detectron2()
-        boxes = self.adjust_coord_order_detectron(boxes)
+        boxes, classes, scores = self.model.detect()
+        # boxes = self.adjust_coord_order_detectron(boxes)
         out_diag_bboxes = [box for box, class_ in zip(boxes, classes) if self._class_dict[class_] == Diagram]
+        #####
         diag_priors = [self.select_diag_prior(bbox) for bbox in out_diag_bboxes]
-        # diag_priors = [Panel(diag) for diag in diag_priors]
+        diag_priors = [Panel(diag) for diag in diag_priors if diag]
         diag_priors = self.filter_diag_false_positives(diag_priors, self.all_arrows)
         self.diagram_extractor.diag_priors = diag_priors
+        #####
+        ####TEST
+        # diag_priors = [Panel(diag, fig=self.fig) for diag in out_diag_bboxes]
+        # self.diagram_extractor.diag_priors = diag_priors
+        ####
+
         diags = self.diagram_extractor.extract()
         conditions_labels = [TextRegionCandidate(box, class_) for box, class_ in zip(boxes, classes)
                              if self._class_dict[class_] in [Label, Conditions]]
@@ -96,14 +86,7 @@ class UnifiedExtractor(BaseExtractor):
                               in zip([conditions, labels], [self.conditions_extractor, self.label_extractor])]
         return diags, conditions, labels
 
-    def adjust_coord_order_detectron(self, boxes):
-        """Adjusts order of coordinates to the expected format
 
-        Detectron outputs boxes with coordinates (x1, y1, x2, y2), however the expected
-        format is (top, left, bottom, right) i.e. (y1, x1, y2, x2). This function switches
-        the coordinates to achieve consistency"""
-        boxes = boxes[:, [1, 0, 3, 2]]
-        return boxes
 
 
     def plot_extracted(self, ax):
@@ -121,20 +104,6 @@ class UnifiedExtractor(BaseExtractor):
         img = (img - img.min()) / (img.max() - img.min())
         return map(lambda x: x[0].numpy(), self.model.predict(img)) # Predictions for first (and only) image in a batch
 
-    def detect_detectron2(self):
-        img = self.fig.img
-        with torch.no_grad():
-            predictions = self.model(img[..., np.newaxis])
-        #visualize predictions
-        # from detectron2.utils.visualizer import Visualizer
-        # import matplotlib.pyplot as plt
-        # vis = Visualizer(img)
-        # vis.draw_instance_predictions(predictions['instances'])
-        # plt.imshow(vis.output.get_image())
-        # plt.show()
-
-        predictions = predictions['instances']
-        return predictions.pred_boxes.tensor.numpy().astype(np.int32), predictions.pred_classes.numpy(), predictions.scores.numpy()
 
 
     def remove_duplicates(self, panels):
@@ -144,10 +113,11 @@ class UnifiedExtractor(BaseExtractor):
         The panels are first grouped into sets of overlapping objects and then removed on a group-by-group basis"""
         dists = np.array([[p1.edge_separation(p2) for p1 in panels] for p2 in panels])
         not_yet_grouped = set(list(range(len(panels))))
+        if len(not_yet_grouped) == 1:
+            return panels
         groups = []
-
         idx1 = 0
-        while idx1 < len(panels) - 1:
+        while idx1 <= len(panels) - 1:
             if idx1 not in not_yet_grouped:
                 idx1 += 1
                 continue
@@ -183,7 +153,6 @@ class UnifiedExtractor(BaseExtractor):
             return None
         return bbox_crop.in_main_fig(prior)
 
-
     def filter_diag_false_positives(self, diag_priors, all_arrows):
         """Filters diagram false positives by comparing with all extracted arrows. If a given region was marked
         as an arrow by the arrow extraction model, then it is removed from a list of potential diagrams"""
@@ -195,8 +164,6 @@ class UnifiedExtractor(BaseExtractor):
 
         return filtered_diags
 
-
-
     def adjust_bboxes(self, region_candidates):
         """Adjusts bboxes inside each of region_candidates by restricting them to cover connected components fully contained within crops bounded
         by the bboxes"""
@@ -205,12 +172,15 @@ class UnifiedExtractor(BaseExtractor):
         for cand in region_candidates:
             crop = cand.panel.create_extended_crop(self.fig, extension=20)
             relevant_ccs = [crop.in_main_fig(cc) for cc in crop.connected_components]
-            relevant_ccs = [cc for cc in relevant_ccs if cc.role is None]  # Previously unassigned ccs
-            if relevant_ccs:
+            unassigned_relevant_ccs = [cc for cc in relevant_ccs if cc.role is None]  # Previously unassigned ccs
+            if unassigned_relevant_ccs: # Remove overlaps with other ccs
+                cand.panel = Panel.create_megapanel(unassigned_relevant_ccs, self.fig)
+                adjusted.append(cand)
+            elif relevant_ccs: # if another cc covers this one entirely, don't remove overlaps
                 cand.panel = Panel.create_megapanel(relevant_ccs, self.fig)
                 adjusted.append(cand)
-        return adjusted
 
+        return adjusted
 
     def reclassify(self, candidates, all_arrows, all_diags):
         """Attempts to reclassify label and conditions candidates based on proximity to arrows and diagrams.
@@ -224,7 +194,7 @@ class UnifiedExtractor(BaseExtractor):
         for cand in candidates:
             closest_arrow = self._find_closest(cand, all_arrows)
             closest_diag = self._find_closest(cand, all_diags)
-            cand_class = self._adjust_class(cand, (closest_arrow, closest_diag))
+            cand_class = self._adjust_class(cand, ({'arrow': closest_arrow, 'diag': closest_diag}))
             cand.parent_panel = cand.set_parent_panel([closest_diag, closest_arrow])
             ## Try OCR on all of them, then postprocess accordingly and instantiate?
             # reclassified.append(cand_class(**cand.pass_attributes()))
@@ -239,21 +209,72 @@ class UnifiedExtractor(BaseExtractor):
 
         return conditions, labels
 
-
     def _adjust_class(self, obj, closest):
-        seps = [obj.edge_separation(cc) for cc in closest]
-        if seps[0] < seps[1] and seps[0] < ExtractorConfig.UNIFIED_RECLASSIFY_DIST_THRESH_COEFF * np.sqrt(obj.area):
-            class_ = Conditions
+        class_ =  self._class_dict[obj._prior_class]
+        seps = {k: obj.edge_separation(v) for k, v in closest.items()}
+        thresh_reclassification_dist = ExtractorConfig.UNIFIED_RECLASSIFY_DIST_THRESH_COEFF * np.sqrt(obj.area)
+        if seps['arrow'] < seps['diag'] and seps['arrow'] < thresh_reclassification_dist:
+            ### Form 4 points, 2 at end of arrows (or extending a bit further), 2 extending from a line normal to the
+            ### arrow's bounding ellipse, and check which is closest. Reclassify as conditions if obj is closer to
+            ### a normal point
+            (x, y), (MA, ma), angle = cv2.fitEllipse(closest['arrow'].contour)
+            angle = angle - 90 # Angle should be anti-clockwise relative to +ve x-axis
 
-        elif seps[1] < seps[0] and seps[1] < ExtractorConfig.UNIFIED_RECLASSIFY_DIST_THRESH_COEFF * np.sqrt(obj.area):
-            class_ = Label
+            normal_angle = angle + 90
+            center = np.asarray([x, y])
+            direction_arrow = np.asarray([1, np.tan(np.radians(angle))])
+            direction_normal = np.asarray([1, np.tan(np.radians(normal_angle))])
+            dist = max(ma, MA) / 2
+            p_a1, p_a2 = find_points_on_line(center, direction_arrow, distance=dist*1.5)
+            p_n1, p_n2 = find_points_on_line(center, direction_normal, distance=dist* 0.5)
+            closest_pt = min([p_a1, p_a2, p_n1, p_n2], key=lambda pt: obj.center_separation(pt))
+            ## Visualize created points
+            # import matplotlib.pyplot as plt
+            # plt.imshow(self.fig.img)
+            # plt.scatter(p_a1[0], p_a1[1], c='r', s=3)
+            # plt.scatter(p_a2[0], p_a2[1], c='r', s=3)
+            # plt.scatter(p_n1[0], p_n1[1], c='b', s=3)
+            # plt.scatter(p_n2[0], p_n2[1], c='b', s=3)
+            # plt.show()
 
-        else:
-            class_ = self._class_dict[obj._prior_class]
+            if any(np.array_equal(closest_pt, p) for p in[p_n1, p_n2]):
+                class_ = Conditions
 
+
+
+        elif seps['diag'] < seps['arrow'] and seps['diag'] < thresh_reclassification_dist:
+            ## Adjust to label if it's somewhere below the diagram
+            ## 'below' is defined as an angle between 135 and 225 degrees (angle desc in function below)
+            direction = find_relative_directional_position(obj.center, closest['diag'].center)
+            if 225 > direction > 135:
+                class_ = Label
+
+        # Visualize pair
+        # import matplotlib.pyplot as plt
+        # from matplotlib.patches import Rectangle
+        # f, ax = plt.subplots()
+        # ax.imshow(self.fig.img, cmap=plt.cm.binary)
+        # panel = obj.panel
+        # rect_bbox = Rectangle((panel.left, panel.top), panel.right - panel.left, panel.bottom - panel.top,
+        #                       facecolor=(52 / 255, 0, 103 / 255), edgecolor=(6 / 255, 0, 99 / 255), alpha=0.4)
+        # ax.add_patch(rect_bbox)
+        # panel = closest['diag'].panel
+        # rect_bbox = Rectangle((panel.left, panel.top), panel.right - panel.left, panel.bottom - panel.top,
+        #                       facecolor=(52 / 255, 0, 103 / 255), edgecolor=(6 / 255, 0, 99 / 255), alpha=0.4)
+        # ax.add_patch(rect_bbox)
+        # plt.show()
+
+
+        # if seps[0] < seps[1] and seps[0] < ExtractorConfig.UNIFIED_RECLASSIFY_DIST_THRESH_COEFF * np.sqrt(obj.area):
+        #     class_ = Conditions
+        #
+        # elif seps[1] < seps[0] and seps[1] < ExtractorConfig.UNIFIED_RECLASSIFY_DIST_THRESH_COEFF * np.sqrt(obj.area):
+        #     class_ = Label
+        #
+        # else:
+        #     class_ = self._class_dict[obj._prior_class]
 
         return class_
-
     def _find_closest(self, obj, other_objects):
         """
         Measure the distance between 'panel' and 'other_objects' to find the object that is closest to the `panel`
@@ -274,17 +295,19 @@ class UnifiedExtractor(BaseExtractor):
 
 class DiagramExtractor(BaseExtractor):
 
-    def __init__(self, fig, diag_priors):
+    def __init__(self, fig, diag_priors, arrows):
         super().__init__(fig)
         self.diag_priors = diag_priors
         self.diags = None
+        self._arrows = arrows
 
     def extract(self):
         assert self.diag_priors is not None, "Diag priors have not been set"
         self.fig.dilation_iterations = self._find_optimal_dilation_extent()
         self.fig.set_roles(self.diag_priors, FigureRoleEnum.DIAGRAMPRIOR)
-        TODO Why are not diag_panels found? Is it to do with num_iterations / dilation etc?
+
         diag_panels = self.complete_structures()
+        # diag_panels = self.diag_priors
         diags = [Diagram(panel=panel, crop=panel.create_crop(self.fig)) for panel in diag_panels]
         self.diags = diags
         return self.diags
@@ -347,15 +370,16 @@ class DiagramExtractor(BaseExtractor):
         fig = self.fig
         dilated_structure_panels = []
         other_ccs = []
-        dilated_imgs = {}
+        dilated_figs = {}
 
         for diag in self.diag_priors:
             num_iterations = fig.dilation_iterations[diag]
             try:
-                dilated_temp = dilated_imgs[num_iterations] # use cached
+                dilated_temp = dilated_figs[num_iterations] # use cached
             except KeyError:
-                dilated_temp = dilate_fig(fig, num_iterations)
-                dilated_imgs[num_iterations] = dilated_temp
+                dilated_temp = dilate_fig(erase_elements(fig, [a.panel for a in self._arrows]),
+                                          num_iterations)
+                dilated_figs[num_iterations] = dilated_temp
 
             dilated_structure_panel = [cc for cc in dilated_temp.connected_components if cc.contains(diag)][0]
             # Crop around with a small extension to get the connected component correctly
@@ -439,15 +463,15 @@ class DiagramExtractor(BaseExtractor):
 
                 crop_rect = Rect((top - vert_ext,left - horz_ext, bottom + vert_ext, right + horz_ext ))
                 p_ratio = skeletonize_area_ratio(self.fig, crop_rect)
-                # print(p_ratio)
+                #print(p_ratio)
                 # log.debug(f'found in-crop skel_pixel ratio: {p_ratio}')
 
                 if p_ratio >= 0.03:
                     n_iterations = 4
-                elif 0.01 < p_ratio < 0.02:
-                    n_iterations = np.ceil(18 - 600 * p_ratio)
+                elif 0.01 < p_ratio < 0.03:
+                    n_iterations = np.ceil(10 - 200 * p_ratio)
                 else:
-                    n_iterations = 12
+                    n_iterations = 8
                 num_iterations[prior] = n_iterations
 
             return num_iterations
@@ -466,4 +490,203 @@ class TextRegionCandidate(Candidate, PanelMethodsMixin):
         return min(nearby_panels, key=lambda p: p.center_separation(self))
 
 
+class Detectron2Adapter:
+    """Performs necessary preprocessing steps, runs predictions using detectron2, and applies postprocessing"""
+
+    ###detectron2 config ###
+    cfg = get_cfg()
+    cfg.merge_from_file(model_zoo.get_config_file("COCO-Detection/faster_rcnn_X_101_32x8d_FPN_3x.yaml"))
+    cfg.MODEL.DEVICE = 'cpu'
+    cfg.DATASETS.TRAIN = ("artificial_data_train",)
+    cfg.DATASETS.TEST = ("artificial_data_test",)
+    cfg.DATALOADER.NUM_WORKERS = 0
+    cfg.MODEL.WEIGHTS = ExtractorConfig.UNIFIED_EXTR_MODEL_WT_PATH
+    # model_zoo.get_checkpoint_url("COCO-Detection/faster_rcnn_X_101_32x8d_FPN_3x.yaml")  # Let training initialize from model zoo
+    cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST = 0.2  # set a custom testing threshold
+    cfg.MODEL.ROI_HEADS.NUM_CLASSES = 3
+    cfg.SOLVER.IMS_PER_BATCH = 4
+    cfg.SOLVER.BASE_LR = 0.01  # pick a good LR
+    cfg.SOLVER.MAX_ITER = 1000
+    cfg.MODEL.ANCHOR_GENERATOR.SIZES = [[8, 16], [16, 32], [32, 64], [64, 128], [256, 512]]
+    # cfg.MODEL.ANCHOR_GENERATOR.SIZES = [[32, 64], [64, 128], [128, 256], [128, 256], [256, 512]]
+    cfg.SOLVER.STEPS = []  # do not decay learning rate
+    cfg.MODEL.ROI_HEADS.BATCH_SIZE_PER_IMAGE = 512  # faster, and good enough for this toy dataset (default: 512)
+    cfg.MODEL.ROI_HEADS.NUM_CLASSES = 3
+    # cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST = ExtractorConfig.UNIFIED_PRED_THRESH
+
+    ###
+
+    def __init__(self, fig):
+        self.model = DefaultPredictor(self.cfg)
+        self.fig = fig
+
+    def detect(self):
+        boxes, classes, scores = self._detect()
+        boxes = self.postprocess(boxes)
+
+        return boxes, classes, scores
+
+    def _detect(self):
+        with torch.no_grad():
+            predictions = self.model(self.fig.img_detectron)
+
+        #Tile
+        # h, w = self.fig.img_detectron.shape[:2]
+        # h1, w1 = h // 2, w // 2
+        # i = self.fig.img_detectron
+        # i1 = i[:h1 + 50, :w1 + 50]
+        # i2 = i[h1 - 50:, :w1 + 50]
+        # i3 = i[:h1 + 50, w1 - 50:]
+        # i4 = i[h1 - 50:, w1 - 50:]
+        # p1 = self.model(i1)
+        # p2 = self.model(i2)
+        # p3 = self.model(i3)
+        # p4 = self.model(i4)
+        #visualize predictions
+        # from detectron2.utils.visualizer import Visualizer
+        # import matplotlib.pyplot as plt
+        # vis = Visualizer(self.fig.img_detectron)
+        # vis.draw_instance_predictions(predictions['instances'])
+        # plt.imshow(vis.output.get_image(), cmap=plt.cm.binary)
+        # plt.title('full_image')
+        # plt.show()
+        # for i, p in zip([i1, i2, i3, i4], [p1, p2, p3, p4]):
+        #     vis = Visualizer(i)
+        #     vis.draw_instance_predictions(p['instances'])
+        #     plt.imshow(vis.output.get_image(), cmap=plt.cm.binary)
+        #     plt.show()
+
+        #Idea: Grab all predictions from the whole image detections, and only the smaller boxes from tiled predictions
+        # From big labels, estimate line height and then grab all single line labels from tiles
+        # Merge tiled labels if they span multiple tiles
+        predictions = predictions['instances']
+        tiler = ImageTiler(self.fig.img_detectron, ExtractorConfig.TILER_MAX_TILE_DIMS, predictions)
+        tiles = tiler.create_tiles()
+        tile_preds = [self.model(t) for t in tiles]
+
+        tile_predictions = tiler.transform_tile_predictions(tile_preds)
+        tile_predictions = tiler.filter_small_boxes(tile_predictions)
+        combined_preds = self.combine_predictions(predictions, tile_predictions)
+        return combined_preds.pred_boxes.tensor.numpy(), combined_preds.pred_classes.numpy(), combined_preds.scores.numpy()
+
+    def postprocess(self, boxes):
+
+        boxes = self.adjust_coord_order_detectron(boxes)
+        boxes = self.rescale_to_img_dims(boxes)
+        return boxes
+
+    def adjust_coord_order_detectron(self, boxes):
+        """Adjusts order of coordinates to the expected format
+
+        Detectron outputs boxes with coordinates (x1, y1, x2, y2), however the expected
+        format is (top, left, bottom, right) i.e. (y1, x1, y2, x2). This function switches
+        the coordinates to achieve consistency"""
+        boxes = boxes[:, [1, 0, 3, 2]]
+        return boxes
+
+    def rescale_to_img_dims(self, boxes):
+        if self.fig.scaling_factor:
+            boxes = boxes * self.fig.scaling_factor
+        return boxes.astype(np.int32)
+
+    def combine_predictions(self, *preds):
+        boxes = Boxes(Tensor(np.concatenate([p.pred_boxes.tensor.numpy() for p in preds], axis=0)))
+        classes = Tensor(np.concatenate([p.pred_classes.numpy() for p in preds], axis=0))
+        scores = Tensor(np.concatenate([p.scores.numpy() for p in preds], axis=0))
+
+        instances = Instances(image_size=self.fig.img.shape[:2])
+        instances.set('pred_boxes', boxes)
+        instances.set('pred_classes', classes)
+        instances.set('scores', scores)
+        return instances
+
+class ImageTiler:
+    def __init__(self, img, max_tile_dims, main_predictions, extension=100):
+        self.img = img
+        self.max_tile_dims = max_tile_dims
+        self.main_predictions = main_predictions
+
+        self.extension = extension
+        self.tile_dims = []
+
+    def create_tiles(self):
+        """Splits image into segments of dims no larger than tile_dims"""
+        h, w = self.img.shape[:2]
+        tile_h, tile_w = self.max_tile_dims
+        num_h_divisor_points= ceil(h / tile_h) + 1
+        num_w_divisor_points = ceil(w / tile_w) + 1
+        h_segments = np.linspace(0, h, num_h_divisor_points, dtype=np.int32)
+        w_segments = np.linspace(0, w, num_w_divisor_points, dtype=np.int32)
+        h_segments = zip(h_segments[:-1], h_segments[1:])
+        # print(h_segments)
+        w_segments = zip(w_segments[:-1], w_segments[1:])
+        tiles_dims = product(h_segments, w_segments)
+        tiles = []
+        for dims in tiles_dims:
+            # print(dims)
+            (h_start, h_end), (w_start, w_end) = dims
+
+            h_start = h_start - self.extension
+            h_end = h_end + self.extension
+            w_start = w_start - self.extension
+            w_end = w_end + self.extension
+
+            h_start = max(h_start, 0)
+            h_end = min(h_end, h)
+            w_start = max(w_start, 0)
+            w_end = min(w_end, w)
+
+            tile = self.img[h_start:h_end, w_start:w_end]
+            self.tile_dims.append(((h_start, h_end), (w_start, w_end)))
+            tiles.append(tile)
+        return tiles
+
+    def filter_small_boxes(self, instances):
+        boxes = instances.pred_boxes.tensor.numpy()
+        classes = instances.pred_classes.numpy()
+        scores = instances.scores.numpy()
+        def area(box):
+            x0, y0, x1, y1 = box
+            return(x1 - x0) * (y1 - y0)
+
+        main_pred_boxes = self.main_predictions.pred_boxes.tensor.numpy()
+        thresh_area = np.percentile([area(b) for b in main_pred_boxes], ExtractorConfig.TILER_THRESH_AREA_PERCENTILE)
+
+        filter_idx = [i for i in range(boxes.shape[0]) if area(boxes[i]) < thresh_area]
+        boxes = Boxes(boxes[filter_idx])
+        classes = Tensor(classes[filter_idx])
+        scores = Tensor(scores[filter_idx])
+        instances = self.create_detectron_instances(boxes, classes, scores)
+        return instances
+
+    def transform_tile_predictions(self, preds):
+        """Transforms coordinates of predictions from tile into the main image coordinate system"""
+        preds_transformed_boxes = []
+        preds_transformed_classes = []
+        preds_transformed_scores = []
+        for tile_preds, tile_dims in zip(preds, self.tile_dims):
+            ((h_start, h_end), (w_start, w_end)) = tile_dims
+            tile_preds = tile_preds['instances']
+            classes = tile_preds.pred_classes.numpy()
+            scores = tile_preds.scores.numpy()
+
+            x0, y0, x1, y1 = np.split(tile_preds.pred_boxes.tensor.numpy(), 4, axis=1)
+            x0, x1 = x0 + w_start, x1 + w_start
+            y0, y1 = y0 + h_start, y1 + h_start
+            tile_preds_transformed = np.concatenate((x0, y0, x1, y1), axis=1)
+            preds_transformed_boxes.extend(tile_preds_transformed.tolist())
+            preds_transformed_classes.extend(classes.tolist())
+            preds_transformed_scores.extend(scores.tolist())
+        boxes = Boxes(Tensor(preds_transformed_boxes))
+        instances = self.create_detectron_instances(boxes, Tensor(preds_transformed_classes),
+                                                    Tensor(preds_transformed_scores))
+        return instances
+            # Translate the coords using h_start and w_start as the translation vector
+
+    def create_detectron_instances(self, boxes, classes, scores):
+        instances = Instances(image_size=self.img.shape[:2])
+        instances.set('pred_boxes', boxes)
+        instances.set('pred_classes', classes)
+        instances.set('scores', scores)
+        return instances
 

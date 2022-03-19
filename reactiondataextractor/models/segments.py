@@ -340,7 +340,6 @@ class Rect(object):
             x = other.col
         else:
             x, y = other
-            print(f'other: {type(other)}')
         height = abs(self.center[0] - x)
         length = abs(self.center[1] - y)
         return np.hypot(length, height)
@@ -535,14 +534,16 @@ class Panel(Rect):
 class Figure(object):
     """A figure img."""
 
-    def __init__(self, img, raw_img):
+    def __init__(self, img, raw_img, img_detectron=None):
         """
         :param numpy.ndarray img: Figure img.
         :param numpy.ndarray raw_img: raw img (without preprocessing, e.g. binarisation)
+        :param numpy.ndarray img_detectron: image loaded using the default settings, suitable for prediction in detectron
         """
         self.connected_components = None
         self.img = img
         self.raw_img = raw_img
+        self.img_detectron = img_detectron
         self.kernel_sizes = None
         self.single_bond_length = None
         self.width, self.height = img.shape[1], img.shape[0]
@@ -603,14 +604,14 @@ class Figure(object):
         # labelled, _ = ndi.label(self.img)
         panels = []
         # regions = regionprops(labelled)
-        contours, _ = cv2.findContours(self.img, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
+        # contours, _ = cv2.findContours(self.img, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
         _, _, stats, _ = cv2.connectedComponentsWithStats(cv2.threshold
                                                           (self.img, *ProcessorConfig.BIN_THRESH, cv2.THRESH_BINARY)[1],
                                                           connectivity=8)
 
         for cc_stat in stats:
-            x1, y1, w, h, a = cc_stat
-            if a < self.area * 0.85:  # Spurious cc encompassing the whole image is sometimes produced
+            x1, y1, w, h, _= cc_stat
+            if w*h < self.area * 0.85:  # Spurious cc encompassing the whole image is sometimes produced
                 x2, y2 = x1 + w, y1 + h
                 panels.append(Panel((y1, x1, y2, x2), fig=self,))
 

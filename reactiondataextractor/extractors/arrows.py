@@ -246,7 +246,7 @@ class SolidArrowCandidateExtractor(BaseExtractor):
         skeletonized = skeletonize(fig)
         all_lines = cv2.HoughLinesP(skeletonized.img, rho=1, theta=np.pi/360,
                                     threshold=ExtractorConfig.SOLID_ARROW_THRESHOLD,
-                                    minLineLength=ExtractorConfig.SOLID_ARROW_MIN_LENGTH, maxLineGap=5)
+                                    minLineLength=ExtractorConfig.SOLID_ARROW_MIN_LENGTH, maxLineGap=2)
     # TODO: Fix this Hough Transform (to find optimal number of candidates). Check exactly which arrows were found (visualize)
         for line in all_lines:
             x1, y1, x2, y2 = line.squeeze()
@@ -449,6 +449,13 @@ class SolidArrow(BaseArrow):
     def initialize(self):
         if self.line is None:
             self.line = Line.approximate_line(self.pixels[0], self.pixels[-1])
+
+        if self.contour is None:
+            isolated_arrow_fig = Isolator(None, self, isolate_mask=True).process()
+            cnt, _ = cv2.findContours(isolated_arrow_fig.img,
+                                      ExtractorConfig.CURLY_ARROW_CNT_MODE, ExtractorConfig.CURLY_ARROW_CNT_METHOD)
+            assert len(cnt) == 1
+            self.contour = cnt[0]
 
     @property
     def is_vertical(self):

@@ -7,6 +7,7 @@ import cv2
 class Config:
     FIGURE = None
     ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
+    IMG_PATH = None
 
 
 class ExtractorConfig(Config):
@@ -24,12 +25,17 @@ class ExtractorConfig(Config):
     ARROW_DETECTOR_THRESH = 0.99
 
     # UNIFIED_EXTR_MODEL_WT_PATH = os.path.join(Config.ROOT_DIR, 'models/ml_models/unified_detection/weights.h5')
-    UNIFIED_EXTR_MODEL_WT_PATH = os.path.join(Config.ROOT_DIR, 'models/ml_models/unified_detection/model_final.pth')
+    UNIFIED_EXTR_MODEL_WT_PATH = os.path.join(Config.ROOT_DIR, 'models/ml_models/unified_detection/model_best_15Mar_diou.pth')
+    # UNIFIED_EXTR_MODEL_WT_PATH = os.path.join(Config.ROOT_DIR,
+    #                                           'models/ml_models/unified_detection/model_final 2000_bg_0.pth')
     UNIFIED_DIAG_FP_IOU_THRESH = 0.75
     UNIFIED_RECLASSIFY_DIST_THRESH_COEFF = 2
+    UNIFIED_PRED_THRESH = 0.5
+    TILER_THRESH_AREA_PERCENTILE = 20
+    TILER_MAX_TILE_DIMS = (600, 800) # Desired height of tile (excluding extension overlap betweem tiles)
 
     DIAG_MIN_EXT = 50
-    DIAG_MAX_AREA_FRACTION = 0.35 # Maximum diagram area relative to total image area
+    DIAG_MAX_AREA_FRACTION = 0.45 # Maximum diagram area relative to total image area
     CONDITIONS_SPECIES_PATH = os.path.join(Config.ROOT_DIR, 'dict/species.txt' )
 
 
