@@ -542,3 +542,52 @@ def find_points_on_line(p0, t, distance):
     a = distance / np.sqrt(np.sum(t[0]**2 + t[1]**2))
 
     return p0 + a * t, p0 - a * t
+
+
+def lies_along_arrow_normal(arrow, obj):
+    """Checks whether an object lies along arrow normal.
+
+    Fit an ellipse to arrow contour.
+    Form 4 points, 2 at end of arrows (or extending a bit further), 2 extending from a line normal to the
+    arrow's bounding ellipse, and check which is closest. Reclassify as conditions if obj is closer to
+    a normal point"""
+
+    (x, y), (MA, ma), angle = cv2.fitEllipse(arrow.contour)
+    angle = angle - 90  # Angle should be anti-clockwise relative to +ve x-axis
+
+    normal_angle = angle + 90
+    center = np.asarray([x, y])
+    direction_arrow = np.asarray([1, np.tan(np.radians(angle))])
+    direction_normal = np.asarray([1, np.tan(np.radians(normal_angle))])
+    dist = max(ma, MA) / 2
+    p_a1, p_a2 = find_points_on_line(center, direction_arrow, distance=dist * 1.5)
+    p_n1, p_n2 = find_points_on_line(center, direction_normal, distance=dist * 0.5)
+    closest_pt = min([p_a1, p_a2, p_n1, p_n2], key=lambda pt: obj.center_separation(pt))
+    ## Visualize created points
+    # import matplotlib.pyplot as plt
+    # plt.imshow(self.fig.img)
+    # plt.scatter(p_a1[0], p_a1[1], c='r', s=3)
+    # plt.scatter(p_a2[0], p_a2[1], c='r', s=3)
+    # plt.scatter(p_n1[0], p_n1[1], c='b', s=3)
+    # plt.scatter(p_n2[0], p_n2[1], c='b', s=3)
+    # plt.show()
+
+    if any(np.array_equal(closest_pt, p) for p in [p_n1, p_n2]):
+        return True
+    return False
+
+def compute_ioa(panel1, panel2):
+    """Compute intersection of two bounding boxes represented by Panels,
+    then divide by the area of box stored inside panel1"""
+
+    t1, l1, b1, r1 = panel1
+    t2, l2, b2, r2 = panel2
+
+    t = max(t1, t2)
+    b = min(b1, b2)
+    l = max(l1, l2)
+    r = min(r1, r2)
+
+    area_i = max(0, (r - l)) * max(0, (b - t))
+
+    return area_i/panel1.area

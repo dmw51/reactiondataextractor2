@@ -1,7 +1,12 @@
 """This module contains all parts of the unified extractor for diagrams, labels and reaction conditions"""
 import copy
+import os
+import warnings
+from collections.abc import Iterable
 from itertools import product
 from math import ceil
+import re
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -29,8 +34,11 @@ from ..config import ExtractorConfig, Config
 from ..models.reaction import Diagram, Conditions, Label
 from ..models.segments import Panel, Rect, FigureRoleEnum, Crop, PanelMethodsMixin
 from ..utils import skeletonize_area_ratio, dilate_fig, erase_elements, find_relative_directional_position, \
-    find_points_on_line
+    find_points_on_line, compute_ioa, lies_along_arrow_normal
 
+parent_dir = os.path.dirname(os.path.abspath(__file__))
+# superatom_file = os.path.join(parent_dir, '..', 'dict', 'superatom.txt')
+superatom_file = os.path.join(parent_dir, '..', 'dict', 'filter_superatoms.txt')
 
 class UnifiedExtractor(BaseExtractor):
 
@@ -64,28 +72,102 @@ class UnifiedExtractor(BaseExtractor):
     def extract(self):
         boxes, classes, scores = self.model.detect()
         # boxes = self.adjust_coord_order_detectron(boxes)
-        out_diag_bboxes = [box for box, class_ in zip(boxes, classes) if self._class_dict[class_] == Diagram]
-        #####
-        diag_priors = [self.select_diag_prior(bbox) for bbox in out_diag_bboxes]
+        out_diag_boxes = [box for box, class_ in zip(boxes, classes) if self._class_dict[class_] == Diagram]
+        # print('posprocessing diags...')
+        diags = self.postprocess_diagrams(out_diag_boxes)
+        text_regions = [TextRegionCandidate(box, class_) for box, class_ in zip(boxes, classes)
+                        if self._class_dict[class_] in [Label, Conditions]]
+        conditions, labels = self.postprocess_text_regions(text_regions)
+        self.add_diags_to_conditions(diags, conditions)
+        # adjusted_candidates = self.adjust_bboxes(conditions_labels)
+        # conditions, labels = self.reclassify(adjusted_candidates, self.all_arrows, diags)
+        # conditions, labels = [self.remove_duplicates(group) for group in [conditions, labels]]
+        # conditions, labels = [self.extract_elements(group, extractor) for group, extractor
+        #                       in zip([conditions, labels], [self.conditions_extractor, self.label_extractor])]
+        return diags, conditions, labels
+
+    def add_diags_to_conditions(self, diags, conditions):
+        for diag in diags:
+            for cond in conditions:
+                if lies_along_arrow_normal(cond.arrow, diag) and diag.edge_separation(cond.arrow.panel) < ExtractorConfig.ARROW_DIAG_MAX_DISTANCE:
+                    cond.panel = Panel.create_megapanel([cond.panel, diag.panel], fig=cond.panel.fig)
+
+    def postprocess_diagrams(self, out_diag_boxes):
+        """Postprocess diagram bounding boxes from the detectron model"""
+        diag_priors = [self.select_diag_prior(bbox) for bbox in out_diag_boxes]
         diag_priors = [Panel(diag) for diag in diag_priors if diag]
         diag_priors = self.filter_diag_false_positives(diag_priors, self.all_arrows)
         self.diagram_extractor.diag_priors = diag_priors
-        #####
-        ####TEST
-        # diag_priors = [Panel(diag, fig=self.fig) for diag in out_diag_bboxes]
-        # self.diagram_extractor.diag_priors = diag_priors
-        ####
-
         diags = self.diagram_extractor.extract()
-        conditions_labels = [TextRegionCandidate(box, class_) for box, class_ in zip(boxes, classes)
-                             if self._class_dict[class_] in [Label, Conditions]]
-        adjusted_candidates = self.adjust_bboxes(conditions_labels)
-        conditions, labels = self.reclassify(adjusted_candidates, self.all_arrows, diags)
+        return diags
+
+    def postprocess_text_regions(self, text_regions):
+
+        adjusted_candidates = self.adjust_bboxes(text_regions)
+        conditions, labels = self.reclassify(adjusted_candidates, self.all_arrows, self.diagram_extractor.extracted)
         conditions, labels = [self.remove_duplicates(group) for group in [conditions, labels]]
         conditions, labels = [self.extract_elements(group, extractor) for group, extractor
                               in zip([conditions, labels], [self.conditions_extractor, self.label_extractor])]
-        return diags, conditions, labels
+        self.conditions_extractor._extracted = self.filter_text_false_positives(conditions, self.diagram_extractor.extracted)
+        self.label_extractor._extracted = self.filter_text_false_positives(labels, self.diagram_extractor.extracted)
+        ext_cond = self.conditions_extractor.extracted
+        ### Pack into a method  - This is not the exact solution, consider when i-th region gets merged with n > 1 regions
+        merged_cond = []
+        unmerged_idx = list(range(len(ext_cond)))
+        for i in range(len(ext_cond)):
+            for j in range(i+1, len(ext_cond)):
+                if ext_cond[i].panel.edge_separation(ext_cond[j].panel) < 150 and ext_cond[i].arrow == ext_cond[j].arrow:
+                    unmerged_idx.remove(i)
+                    unmerged_idx.remove(j)
+                    merged_cond.append(ext_cond[i].merge_conditions_regions(ext_cond[j]))
+        for i in unmerged_idx:
+            merged_cond.append(ext_cond[i])
+        self.conditions_extractor._extracted = merged_cond
+        ###
 
+        return self.conditions_extractor.extracted, self.label_extractor.extracted
+
+    def filter_text_false_positives(self, text_regions, diags):
+        """Filter out parts of diagrams (usually superatom labels) falsely marked as conditions or labels.
+        Also filters pluses'
+        """
+        with open(superatom_file) as file:
+            superatoms = [token.strip() for line in file.readlines() for token in line.split(' ')]
+
+        regions_overlapping_diags = []
+        filtered_regions = copy.deepcopy(text_regions)
+
+        for region in text_regions:
+            text = region.text
+            if isinstance(text, list):
+                text = ' '.join(text)
+            plus_matched = re.search(r'\+', text)
+            if plus_matched and len(text) < 4:
+                filtered_regions.remove(region)
+            elif any(compute_ioa(region.panel, diag) > ExtractorConfig.UNIFIED_IOA_FILTER_THRESH for diag in diags):
+                regions_overlapping_diags.append(region)
+
+        # filtered_regions = copy.deepcopy(text_regions)
+        # regions_overlapping_diags = [region for region in text_regions
+        #                              if any(compute_ioa(region.panel, diag) > ExtractorConfig.UNIFIED_IOA_FILTER_THRESH
+        #                                     for diag in diags)]
+
+        for region in regions_overlapping_diags:
+
+            is_superatom = False
+            text = region.text
+            if isinstance(text, list):
+                text = ' '.join(text)
+            for superatom in superatoms:
+                matched = re.search(superatom, text)
+                # The text region should consist of the superatom and be short enough:
+                if matched and len(text) <= len(superatom) + 4:
+                    is_superatom = True
+                    break
+            if is_superatom:
+                filtered_regions.remove(region)
+
+        return filtered_regions
 
 
 
@@ -172,11 +254,11 @@ class UnifiedExtractor(BaseExtractor):
         for cand in region_candidates:
             crop = cand.panel.create_extended_crop(self.fig, extension=20)
             relevant_ccs = [crop.in_main_fig(cc) for cc in crop.connected_components]
-            unassigned_relevant_ccs = [cc for cc in relevant_ccs if cc.role is None]  # Previously unassigned ccs
-            if unassigned_relevant_ccs: # Remove overlaps with other ccs
-                cand.panel = Panel.create_megapanel(unassigned_relevant_ccs, self.fig)
-                adjusted.append(cand)
-            elif relevant_ccs: # if another cc covers this one entirely, don't remove overlaps
+            # unassigned_relevant_ccs = [cc for cc in relevant_ccs if cc.role is None]  # Previously unassigned ccs
+            # if unassigned_relevant_ccs: # Remove overlaps with other ccs
+            #     cand.panel = Panel.create_megapanel(unassigned_relevant_ccs, self.fig)
+            #     adjusted.append(cand)
+            if relevant_ccs: # if another cc covers this one entirely, don't remove overlaps
                 cand.panel = Panel.create_megapanel(relevant_ccs, self.fig)
                 adjusted.append(cand)
 
@@ -195,7 +277,8 @@ class UnifiedExtractor(BaseExtractor):
             closest_arrow = self._find_closest(cand, all_arrows)
             closest_diag = self._find_closest(cand, all_diags)
             cand_class = self._adjust_class(cand, ({'arrow': closest_arrow, 'diag': closest_diag}))
-            cand.parent_panel = cand.set_parent_panel([closest_diag, closest_arrow])
+
+            cand.set_parent_panel({'arrow': closest_arrow, 'diag': closest_diag}, cand_class)
             ## Try OCR on all of them, then postprocess accordingly and instantiate?
             # reclassified.append(cand_class(**cand.pass_attributes()))
             if cand_class == Conditions:
@@ -214,30 +297,31 @@ class UnifiedExtractor(BaseExtractor):
         seps = {k: obj.edge_separation(v) for k, v in closest.items()}
         thresh_reclassification_dist = ExtractorConfig.UNIFIED_RECLASSIFY_DIST_THRESH_COEFF * np.sqrt(obj.area)
         if seps['arrow'] < seps['diag'] and seps['arrow'] < thresh_reclassification_dist:
-            ### Form 4 points, 2 at end of arrows (or extending a bit further), 2 extending from a line normal to the
-            ### arrow's bounding ellipse, and check which is closest. Reclassify as conditions if obj is closer to
-            ### a normal point
-            (x, y), (MA, ma), angle = cv2.fitEllipse(closest['arrow'].contour)
-            angle = angle - 90 # Angle should be anti-clockwise relative to +ve x-axis
-
-            normal_angle = angle + 90
-            center = np.asarray([x, y])
-            direction_arrow = np.asarray([1, np.tan(np.radians(angle))])
-            direction_normal = np.asarray([1, np.tan(np.radians(normal_angle))])
-            dist = max(ma, MA) / 2
-            p_a1, p_a2 = find_points_on_line(center, direction_arrow, distance=dist*1.5)
-            p_n1, p_n2 = find_points_on_line(center, direction_normal, distance=dist* 0.5)
-            closest_pt = min([p_a1, p_a2, p_n1, p_n2], key=lambda pt: obj.center_separation(pt))
-            ## Visualize created points
-            # import matplotlib.pyplot as plt
-            # plt.imshow(self.fig.img)
-            # plt.scatter(p_a1[0], p_a1[1], c='r', s=3)
-            # plt.scatter(p_a2[0], p_a2[1], c='r', s=3)
-            # plt.scatter(p_n1[0], p_n1[1], c='b', s=3)
-            # plt.scatter(p_n2[0], p_n2[1], c='b', s=3)
-            # plt.show()
-
-            if any(np.array_equal(closest_pt, p) for p in[p_n1, p_n2]):
+            # ### Form 4 points, 2 at end of arrows (or extending a bit further), 2 extending from a line normal to the
+            # ### arrow's bounding ellipse, and check which is closest. Reclassify as conditions if obj is closer to
+            # ### a normal point
+            # (x, y), (MA, ma), angle = cv2.fitEllipse(closest['arrow'].contour)
+            # angle = angle - 90 # Angle should be anti-clockwise relative to +ve x-axis
+            #
+            # normal_angle = angle + 90
+            # center = np.asarray([x, y])
+            # direction_arrow = np.asarray([1, np.tan(np.radians(angle))])
+            # direction_normal = np.asarray([1, np.tan(np.radians(normal_angle))])
+            # dist = max(ma, MA) / 2
+            # p_a1, p_a2 = find_points_on_line(center, direction_arrow, distance=dist*1.5)
+            # p_n1, p_n2 = find_points_on_line(center, direction_normal, distance=dist* 0.5)
+            # closest_pt = min([p_a1, p_a2, p_n1, p_n2], key=lambda pt: obj.center_separation(pt))
+            # ## Visualize created points
+            # # import matplotlib.pyplot as plt
+            # # plt.imshow(self.fig.img)
+            # # plt.scatter(p_a1[0], p_a1[1], c='r', s=3)
+            # # plt.scatter(p_a2[0], p_a2[1], c='r', s=3)
+            # # plt.scatter(p_n1[0], p_n1[1], c='b', s=3)
+            # # plt.scatter(p_n2[0], p_n2[1], c='b', s=3)
+            # # plt.show()
+            #
+            # if any(np.array_equal(closest_pt, p) for p in[p_n1, p_n2]):
+            if lies_along_arrow_normal(closest['arrow'], obj):
                 class_ = Conditions
 
 
@@ -486,8 +570,15 @@ class TextRegionCandidate(Candidate, PanelMethodsMixin):
         self._prior_class = class_
         self.parent_panel = None
 
-    def set_parent_panel(self, nearby_panels):
-        return min(nearby_panels, key=lambda p: p.center_separation(self))
+    def set_parent_panel(self, closest_panels, posterior_class):
+        """Sets parent panel by choosing either the closest arrow or diagrams based on the posterior class of this object"""
+        if posterior_class == Conditions:
+            parent = closest_panels['arrow']
+        elif posterior_class == Label:
+            parent = closest_panels['diag']
+        else:
+            raise TypeError("Could not assign match class to a parent panel type")
+        self.parent_panel = parent
 
 
 class Detectron2Adapter:
@@ -527,46 +618,48 @@ class Detectron2Adapter:
         return boxes, classes, scores
 
     def _detect(self):
-        with torch.no_grad():
-            predictions = self.model(self.fig.img_detectron)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            with torch.no_grad():
+                predictions = self.model(self.fig.img_detectron)
 
-        #Tile
-        # h, w = self.fig.img_detectron.shape[:2]
-        # h1, w1 = h // 2, w // 2
-        # i = self.fig.img_detectron
-        # i1 = i[:h1 + 50, :w1 + 50]
-        # i2 = i[h1 - 50:, :w1 + 50]
-        # i3 = i[:h1 + 50, w1 - 50:]
-        # i4 = i[h1 - 50:, w1 - 50:]
-        # p1 = self.model(i1)
-        # p2 = self.model(i2)
-        # p3 = self.model(i3)
-        # p4 = self.model(i4)
-        #visualize predictions
-        # from detectron2.utils.visualizer import Visualizer
-        # import matplotlib.pyplot as plt
-        # vis = Visualizer(self.fig.img_detectron)
-        # vis.draw_instance_predictions(predictions['instances'])
-        # plt.imshow(vis.output.get_image(), cmap=plt.cm.binary)
-        # plt.title('full_image')
-        # plt.show()
-        # for i, p in zip([i1, i2, i3, i4], [p1, p2, p3, p4]):
-        #     vis = Visualizer(i)
-        #     vis.draw_instance_predictions(p['instances'])
-        #     plt.imshow(vis.output.get_image(), cmap=plt.cm.binary)
-        #     plt.show()
+            #Tile
+            # h, w = self.fig.img_detectron.shape[:2]
+            # h1, w1 = h // 2, w // 2
+            # i = self.fig.img_detectron
+            # i1 = i[:h1 + 50, :w1 + 50]
+            # i2 = i[h1 - 50:, :w1 + 50]
+            # i3 = i[:h1 + 50, w1 - 50:]
+            # i4 = i[h1 - 50:, w1 - 50:]
+            # p1 = self.model(i1)
+            # p2 = self.model(i2)
+            # p3 = self.model(i3)
+            # p4 = self.model(i4)
+            #visualize predictions
+            # from detectron2.utils.visualizer import Visualizer
+            # import matplotlib.pyplot as plt
+            # vis = Visualizer(self.fig.img_detectron)
+            # vis.draw_instance_predictions(predictions['instances'])
+            # plt.imshow(vis.output.get_image(), cmap=plt.cm.binary)
+            # plt.title('full_image')
+            # plt.show()
+            # for i, p in zip([i1, i2, i3, i4], [p1, p2, p3, p4]):
+            #     vis = Visualizer(i)
+            #     vis.draw_instance_predictions(p['instances'])
+            #     plt.imshow(vis.output.get_image(), cmap=plt.cm.binary)
+            #     plt.show()
 
-        #Idea: Grab all predictions from the whole image detections, and only the smaller boxes from tiled predictions
-        # From big labels, estimate line height and then grab all single line labels from tiles
-        # Merge tiled labels if they span multiple tiles
-        predictions = predictions['instances']
-        tiler = ImageTiler(self.fig.img_detectron, ExtractorConfig.TILER_MAX_TILE_DIMS, predictions)
-        tiles = tiler.create_tiles()
-        tile_preds = [self.model(t) for t in tiles]
+            #Idea: Grab all predictions from the whole image detections, and only the smaller boxes from tiled predictions
+            # From big labels, estimate line height and then grab all single line labels from tiles
+            # Merge tiled labels if they span multiple tiles
+            predictions = predictions['instances']
+            tiler = ImageTiler(self.fig.img_detectron, ExtractorConfig.TILER_MAX_TILE_DIMS, predictions)
+            tiles = tiler.create_tiles()
+            tile_preds = [self.model(t) for t in tiles]
 
-        tile_predictions = tiler.transform_tile_predictions(tile_preds)
-        tile_predictions = tiler.filter_small_boxes(tile_predictions)
-        combined_preds = self.combine_predictions(predictions, tile_predictions)
+            tile_predictions = tiler.transform_tile_predictions(tile_preds)
+            tile_predictions = tiler.filter_small_boxes(tile_predictions)
+            combined_preds = self.combine_predictions(predictions, tile_predictions)
         return combined_preds.pred_boxes.tensor.numpy(), combined_preds.pred_classes.numpy(), combined_preds.scores.numpy()
 
     def postprocess(self, boxes):

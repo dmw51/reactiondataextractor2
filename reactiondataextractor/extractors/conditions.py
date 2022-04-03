@@ -15,6 +15,7 @@ from __future__ import division
 from __future__ import unicode_literals
 
 from collections import Counter
+from collections.abc import Iterable, Sequence
 from itertools import chain
 import logging
 from matplotlib.patches import Rectangle
@@ -109,7 +110,7 @@ class ConditionsExtractor(BaseExtractor):
         recognised = img_to_text(self.fig, candidate, whitelist=CONDITIONS_WHITELIST)
         if recognised:
             dct = ConditionParser(recognised).parse_conditions()
-            return Conditions(conditions_dct=dct, **candidate.pass_attributes())
+            return Conditions(conditions_dct=dct, **candidate.pass_attributes(), text=recognised)
         # textlines, condition_structures = self.find_step_conditions(arrow)
         # [setattr(panel, 'role', ReactionRoleEnum.CONDITIONS) for panel in condition_structures]
         # if textlines:
@@ -364,7 +365,7 @@ class ConditionParser:
     def parse_conditions(self):
         parse_fns = [ConditionParser._parse_coreactants, ConditionParser._parse_catalysis,
                      ConditionParser._parse_other_species, ConditionParser._parse_other_conditions]
-        conditions_dct = {'catalysts': None, 'coreactants': None, 'other species': None, 'temperature': None,
+        conditions_dct = {'catalysts': [], 'coreactants': [], 'other species': [], 'temperature': None,
                           'pressure': None, 'time': None, 'yield': None}
 
         coreactants_lst = []
@@ -664,8 +665,9 @@ class Conditions:
     :type diags: list[Panel]
     """
 
-    def __init__(self, panel, conditions_dct, parent_panel, diags=None, _prior_class=None):
+    def __init__(self, panel, conditions_dct, parent_panel, text=None, diags=None, _prior_class=None):
         self.panel = panel
+        self.text = text
         self.conditions_dct = conditions_dct
         self._parent_panel = parent_panel
         self._prior_class = _prior_class
@@ -690,8 +692,7 @@ class Conditions:
 
     def __eq__(self, other):
         if other.__class__ == self.__class__:
-            return self.conditions_dct == other.conditions_dct
-
+            return self.panel == other.panel
         else:
             return False
 
@@ -734,3 +735,20 @@ class Conditions:
     @property
     def yield_(self):
         return self.conditions_dct['yield']
+
+    def merge_conditions_regions(self, other_region):
+        keys = self.conditions_dct.keys()
+        new_dict = {}
+        for k in keys:
+            if isinstance(self.conditions_dct[k], Sequence):
+                new_value = self.conditions_dct[k] + other_region.conditions_dct[k]
+            else:
+                val = self.conditions_dct[k]
+                new_value = val if val else other_region.conditions_dct[k]
+            new_dict[k] = new_value
+        panel = self.panel.create_megapanel([self.panel, other_region.panel], fig=self.panel.fig)
+        text = self.text + other_region.text
+        diags = self._diags + other_region._diags
+
+        return Conditions(panel=panel, conditions_dct=new_dict, parent_panel=self._parent_panel, text=text,diags=diags,
+                          _prior_class=self._prior_class)

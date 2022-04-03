@@ -31,9 +31,12 @@ class ExtractorConfig(Config):
     UNIFIED_DIAG_FP_IOU_THRESH = 0.75
     UNIFIED_RECLASSIFY_DIST_THRESH_COEFF = 2
     UNIFIED_PRED_THRESH = 0.5
+    UNIFIED_IOA_FILTER_THRESH = 0.9
+
     TILER_THRESH_AREA_PERCENTILE = 20
     TILER_MAX_TILE_DIMS = (600, 800) # Desired height of tile (excluding extension overlap betweem tiles)
 
+    ARROW_DIAG_MAX_DISTANCE = 50 # Distance for classifying diagrams as part of a conditions region around the arrow
     DIAG_MIN_EXT = 50
     DIAG_MAX_AREA_FRACTION = 0.45 # Maximum diagram area relative to total image area
     CONDITIONS_SPECIES_PATH = os.path.join(Config.ROOT_DIR, 'dict/species.txt' )
