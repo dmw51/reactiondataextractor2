@@ -392,8 +392,6 @@ class Rect(object):
         else:  # rectangles intersect
             return 0.
 
-
-
     def overlaps_vertically(self, other_rect):
         """
         Return True if two `Rect` objects overlap along the vertical axis (i.e. when projected onto it), False otherwise
@@ -448,8 +446,8 @@ class Rect(object):
         iou = area_intersection / (area_a + area_b - area_intersection)
         return iou
 
-class Panel(Rect):
 
+class Panel(Rect):
 
     @classmethod
     def create_megapanel(cls, boxes, fig):

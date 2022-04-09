@@ -258,7 +258,7 @@ def is_slope_consistent(lines):
     """
     if not all(isinstance(line, Line) for line in lines):
         pairs = [[Point(*coords) for coords in pair] for pair in OpencvToSkimageHoughLineAdapter(lines)]
-        lines = [Line(pair) for pair in pairs]
+        lines = [Line(pixels=pair, endpoints=pair) for pair in pairs]
 
     if all(abs(line.slope) > 10 for line in lines):  # very high/low slope == inf
         return True
@@ -591,3 +591,7 @@ def compute_ioa(panel1, panel2):
     area_i = max(0, (r - l)) * max(0, (b - t))
 
     return area_i/panel1.area
+
+
+def euclidean_distance(p1, p2):
+    return np.sqrt(np.sum([(x2-x1)**2 for x1, x2 in zip(p1, p2)]))

@@ -270,7 +270,7 @@ class SolidArrowCandidateExtractor(BaseExtractor):
             panel_top, panel_bottom = np.min(arrow_pixels[:, 0]), np.max(arrow_pixels[:, 0])+1
             panel_left, panel_right = np.min(arrow_pixels[:, 1]), np.max(arrow_pixels[:, 1])+1
 
-            arrow_candidates.append(ArrowCandidate(arrow_pixels,
+            arrow_candidates.append(ArrowCandidate(pixels=arrow_pixels,
                                                panel=parent_panel))
         return arrow_candidates
 

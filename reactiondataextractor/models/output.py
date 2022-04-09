@@ -9,8 +9,11 @@ author: Damian Wilary
 email: dmw51@cam.ac.uk
 
 """
+import copy
 from abc import ABC, abstractmethod
 from collections import Counter
+
+import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
@@ -18,6 +21,7 @@ import json
 
 from sklearn.cluster import DBSCAN
 
+from .geometry import Line, Point
 from .reaction import Diagram, ReactionStep
 from .segments import ReactionRoleEnum
 # from .utils import Point, PrettyFrozenSet, PrettyList
@@ -28,7 +32,7 @@ from .reaction import Conditions
 import matplotlib
 
 from ..config import SchemeConfig
-from ..utils import PrettyFrozenSet
+from ..utils import PrettyFrozenSet, find_points_on_line, euclidean_distance
 
 
 class Graph(ABC):
@@ -475,3 +479,232 @@ class ReactionScheme(Graph):
         species = find_nearby_ccs(Point(move_to_vertical, move_to_horizontal), diags, distances)
 
         return species
+
+class RoleProbe:
+    """This is a class used to probe reaction schemes around arrows to assign roles to diagrams and reconstruct
+    the reaction in a machine-readable format"""
+
+    def __init__(self, fig, arrows, diagrams):
+        self.fig = fig
+        self.arrows = arrows
+        self.diagrams = diagrams
+        self.stepsize = min([x for diag in self.diagrams for x in (diag.panel.width, diag.panel.height)]) #Step size should be related to width/height of the smallest diagram, whichever is smaller
+        # Could also be a function depending on arrow direction, but might not be necessary
+        self.segment_length = np.mean([(d.panel.width + d.panel.height) / 2 for d in self.diagrams])
+        # This should be comparable to the largest dim of the largest diagrams, but might not be
+                                # stable to outliers
+
+
+    def probe_around_arrow(self, arrow):
+        # center, direction_normal = self.find_normal_to_arrow(arrow)
+        # center = np.asarray(center)
+        x_one, y_one = arrow.center
+        x_two, y_two = self.fig.img.shape[1] - arrow.center[0], self.fig.img.shape[0] - arrow.center[1]
+
+        region_one_dims = (x_one, y_one)
+        regions_two_dims = (x_two, y_two)
+        diags_one = self._probe_around_arrow(arrow, region_one_dims, switch=-1)
+        diags_two = self._probe_around_arrow(arrow, regions_two_dims, switch=+1)
+        diags_react, diags_prod = self.assign_diags(diags_one, diags_two, arrow)
+        return ReactionStep(arrow, reactants=diags_react, products=diags_prod)
+        # return diags_one, diags_two
+
+
+    def assign_diags(self, group1, group2, arrow):
+        ref_point = arrow.reference_pt # arrow's center of mass which denoted the products' side
+        groups = [group1, group2]
+
+        def compute_ref_group_dist(group, pt):
+            group_centre = np.mean([member.center for member in group], axis=0)
+            return euclidean_distance(group_centre, pt)
+        prod_group = min(groups, key=lambda x: compute_ref_group_dist(x, ref_point))
+        groups.remove(prod_group)
+        react_group = groups[0]
+        return react_group, prod_group
+
+
+
+        # (x, y), (MA, ma), angle = cv2.fitEllipse(arrow.contour)
+        # angle = angle - 90  # Angle should be anti-clockwise relative to +ve x-axis
+        # normal_angle = angle + 90
+        # center = np.asarray([x, y])
+        # direction = np.asarray([1, np.tan(np.radians(angle))])
+        # direction_normal = np.asarray([1, np.tan(np.radians(normal_angle))])
+        #
+        # #Check both directions separately, and choose the one where image edge is reached quicker
+        # # This should be done differently, the centers should lie along the arrow line (arrow direction) and hence the
+        # # step in y direction is equal to stepsize * slope of arrow (should work in extreme cases too since we choose the lower number?)
+        # stepsize_x = self.stepsize * direction[0] ## direction[0] is set to 1 to simplify reasoning
+        # stepsize_y = self.stepsize * direction[1]
+        # num_centers_one_x = center[0] // stepsize_x
+        # num_centers_one_y = center[1] // stepsize_y
+        # num_centers_one = int(min(num_centers_one_x, num_centers_one_y))
+        # deltas = np.array([[stepsize_x * n, stepsize_y * n] for n in range(1, num_centers_one+1)])
+        # centers_one = center - deltas
+        # lines_one = [Line(find_points_on_line(center, direction_normal, distance=self.segment_length))
+        #          for center in centers_one]
+        #
+        # ## Visualize lines ##
+        # # import matplotlib.pyplot as plt
+        # # plt.imshow(self.fig.img)
+        # # for line in lines_one:
+        # #     (x1, y1), (x2, y2) = line.endpoints
+        # #     plt.plot([x1, x2], [y1, y2], c='r')
+        # # plt.show()
+        #
+        # try:
+        #     other_arrows = copy.copy(self.arrows)
+        #     other_arrows.remove(arrow)
+        #     arrow_overlap = [any(self._check_overlap(l, a.panel) for a in other_arrows) for l in lines_one].index(True)
+        # except ValueError:
+        #     arrow_overlap = None
+        #
+        # if arrow_overlap is not None:
+        #     lines_one = lines_one[:arrow_overlap]
+        # diags_one = []
+        # for l in lines_one:
+        #     for d in self.diagrams:
+        #         if self.sufficient_overlap(l, d.panel):
+        #             diags_one.append(d)
+        # diags_one = list(set(diags_one))
+        # ##### REVISION FINISHED - the conditions diag was not classified based on overlap.
+        # ## It should be excluded but maybe the overlap criteria should be less restrictive in general?
+        # ### Wrap the above code inside a function and duplicate for the other side
+        #
+        #
+        # ## Check any overlap overlaps with arrows, discard all lines after the first overlap
+        # ## Then check overlaps with diagrams and include if sufficient overlap
+        #
+        # num_centers_two_x = (self.fig.img.shape[1] - center[0]) // stepsize_x
+        # num_centers_two_y = (self.fig.img.shape[0] - center[1]) // stepsize_y
+        # num_centers_two = int(min(num_centers_two_x, num_centers_two_y))
+        # deltas = np.array([[stepsize_x * n, stepsize_y * n] for n in range(1, num_centers_two+1)])
+        # centers_two = center + deltas
+        # lines_two = [Line(find_points_on_line(center, direction_normal, distance=self.segment_length))
+        #          for center in centers_two]
+        #
+        # try:
+        #     other_arrows = copy.copy(self.arrows)
+        #     other_arrows.remove(arrow)
+        #     arrow_overlap = [any(self._check_overlap(l, a.panel) for a in other_arrows) for l in lines_two].index(True)
+        # except ValueError:
+        #     arrow_overlap = None
+        #
+        # if arrow_overlap is not None:
+        #     lines_two = lines_two[:arrow_overlap]
+        #
+        # diags_two = []
+        # for l in lines_two:
+        #     for d in self.diagrams:
+        #         if self.sufficient_overlap(l, d.panel):
+        #             diags_two.append(d)
+        #
+        # diags_two = list(set(diags_two))
+        #
+        # return diags_one, diags_two
+
+    def find_normal_to_arrow(self, arrow):
+        (x, y), (MA, ma), angle = cv2.fitEllipse(arrow.contour)
+        angle = angle - 90  # Angle should be anti-clockwise relative to +ve x-axis
+        normal_angle = angle + 90
+        center = np.asarray([x, y])
+        direction_normal = np.asarray([1, np.tan(np.radians(normal_angle))])
+        return center, direction_normal
+        p_n1, p_n2 = find_points_on_line(center, direction_normal, distance=self.segment_length)
+        return Line.approximate_line(p_n1, p_n2)
+
+    def sufficient_overlap(self, segment, panel):
+        len_segment = euclidean_distance(*segment.endpoints)
+        t, l, b, r = panel
+        d_diag = euclidean_distance((t,l), (b, r))
+        min_overlap = min(len_segment, d_diag) * SchemeConfig.MIN_PROBING_OVERLAP_FACTOR
+
+        return self._check_overlap(segment, panel) > min_overlap
+
+
+    def _check_overlap(self, segment, panel):
+        """Checks overlap between a line segment and a panel. The overlap is defined as a common line segment between
+        the bounding box and the probing segment
+
+        This can be viewed as looking for an overlap between two rectangles, one defined by the diagram's panel,
+        ane the other by the two endpoints of a segment (which can be seen generically as the top-left, and bottom-right
+        corners)"""
+
+        t1, l1, b1, r1 = panel
+        p1, p2 = segment.endpoints
+        # Define the second rectangle
+        t2, b2 = min(p1[1], p2[1]), max(p1[1], p2[1])
+        l2, r2 = min(p1[0], p2[0]), max(p1[0], p2[0])
+
+        # Define intersection
+        t = max(t1, t2)
+        b = min(b1, b2)
+        l = max(l1, l2)
+        r = min(r1, r2)
+
+        height = b - t
+        width = r - l
+        if height < 0 or width < 0:
+            overlap = 0
+        else:
+            overlap = np.sqrt(height**2 + width**2)
+
+        return overlap
+
+    def _probe_around_arrow(self, arrow , region_dims, switch):
+        """Finds diagrams around an arrow within a region.
+
+        Each arrow divides an image into two regions: one in which potential reactants are located, and one where
+        potential products are located (potential, because a reaction might involve multiple steps and not all species
+        take part in a given step. We perform a line scan in both regions along the direction dictated by an arrow.
+        To achieve this, we create equidistant lines and we control the direction of search propagation using a switch
+        value of -1 or +1 to compute required differences in position from the arrow centre.
+        #TODO: Document this fully
+        """
+        assert switch in [-1, 1]
+        # center = arrow.center
+        region_x_length, region_y_length = region_dims
+
+        (x, y), (MA, ma), angle = cv2.fitEllipse(arrow.contour)
+        angle = angle - 90  # Angle should be anti-clockwise relative to +ve x-axis
+        normal_angle = angle + 90
+        center = np.asarray([x, y])
+        direction = np.asarray([1, np.tan(np.radians(angle))])
+        direction = direction / np.linalg.norm(direction)
+        direction_normal = np.asarray([1, np.tan(np.radians(normal_angle))])
+
+        stepsize_x = self.stepsize * direction[0]
+        stepsize_y = self.stepsize * direction[1]
+        num_centers_x = abs(region_x_length // stepsize_x)
+        num_centers_y = abs(region_y_length // stepsize_y)
+        num_centers = int(min(num_centers_x, num_centers_y))
+        deltas = switch * np.array([[stepsize_x * n, stepsize_y * n] for n in range(1, num_centers + 1)])
+        centers = center + deltas
+        lines = [Line(find_points_on_line(center, direction_normal, distance=self.segment_length))
+                     for center in centers]
+
+        ## Visualize lines ##
+        # import matplotlib.pyplot as plt
+        # plt.imshow(self.fig.img)
+        # for line in lines_one:
+        #     (x1, y1), (x2, y2) = line.endpoints
+        #     plt.plot([x1, x2], [y1, y2], c='r')
+        # plt.show()
+
+        try:
+            other_arrows = copy.copy(self.arrows)
+            other_arrows.remove(arrow)
+            arrow_overlap = [any(self._check_overlap(l, a.panel) for a in other_arrows) for l in lines].index(True)
+        except ValueError:
+            arrow_overlap = None
+
+        if arrow_overlap is not None:
+            lines = lines[:arrow_overlap]
+        diags = []
+        for l in lines:
+            for d in self.diagrams:
+                if self.sufficient_overlap(l, d.panel):
+                    diags.append(d)
+        diags = list(set(diags))
+
+        return diags

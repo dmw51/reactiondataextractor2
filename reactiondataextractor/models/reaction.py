@@ -125,22 +125,25 @@ class ReactionStep(BaseReactionClass):
     """
     This class describes elementary steps in a reaction.
 
-    :param reactants: reactants of a reaction
+    :param arrow: arrow associated with this step
+    :type arrow: BaseArrow
+    :param reactants: reactants of a reaction step
     :type reactants: frozenset[Diagram]
-    :param products: products of a reaction
+    :param products: products of a reaction step
     :type products: frozenset[Diagram]
-    :param conditions: reaction conditions for the step
-    :type conditions: Conditions
+
     """
 
-    def __init__(self, reactants, products, conditions):
+    def __init__(self, arrow, reactants, products):
+        self.arrow = arrow
         self.reactants = PrettyFrozenSet(reactants)
         self.products = PrettyFrozenSet(products)
-        self.conditions = conditions
 
     def __eq__(self, other):
-        return (self.reactants == other.reactants and self.products == other.products and
-                self.conditions == other.conditions)
+        if isinstance(other, ReactionStep):
+            return (self.reactants == other.reactants and self.products == other.products and
+                    self.arrow == other.arrow)
+        return False
 
     def __repr__(self):
         return f'ReactionStep(reactants=({self.reactants}),products=({self.products}),{self.conditions})'
@@ -153,12 +156,10 @@ class ReactionStep(BaseReactionClass):
     def __hash__(self):
         all_species = [species for group in iter(self) for species in group]
         species_hash = sum([hash(species) for species in all_species])
-        return hash(self.conditions) + species_hash
+        return species_hash
 
     def __iter__(self):
-        return iter ((self.reactants, self.products))
-
-
+        return iter((self.reactants, self.products))
 
 
 class Conditions:

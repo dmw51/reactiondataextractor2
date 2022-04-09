@@ -42,11 +42,16 @@ class Point:
 class Line:
     """This is a utility class representing a line in 2D defined by two points
     :param pixels: pixels belonging to a line
-    :type pixels: list[Point]"""
+    :type pixels: list[Point]
+    """
+    # TODO: This class should be refactored so that its internal representation is changed to a vector notation
+    #  This eliminates problems with slope (vertical lines)
+    #  self.pixels should be a lazily-evaluated property, it's not necessary to compute/store it in every case
+    def __init__(self, endpoints, pixels=None):
 
-    def __init__(self, pixels):
-        self.pixels = pixels
+        self.endpoints = endpoints
         self.is_vertical = None
+        self._pixels = pixels
         self.slope, self.intercept = self.get_line_parameters()
 
     def __iter__(self):
@@ -56,11 +61,18 @@ class Line:
         return self.pixels[index]
 
     def __repr__(self):
-        return f'{self.__class__.__name__}({self.pixels})'
+        return f'{self.__class__.__name__}({self.endpoints})'
 
     @property
     def slope(self):
         return self._slope
+
+    @property
+    def pixels(self):
+        if self.pixels is None:
+            self.pixels = self.interpolate_pixels(*self.endpoints)
+        return self.pixels
+
 
     @slope.setter
     def slope(self, value):
@@ -73,11 +85,13 @@ class Line:
         :return: slope and intercept of the line
         :rtype: tuple
         """
-        p1 = self.pixels[0]
-        x1, y1 = p1.col, p1.row
-
-        p2 = self.pixels[-1]  # Can be any two points, but non-neighbouring points increase accuracy of calculation
-        x2, y2 = p2.col, p2.row
+        p1, p2 = self.endpoints
+        try:
+            x1, y1 = p1.col, p1.row
+            x2, y2 = p2.col, p2.row
+        except AttributeError: # Not a Point; assume (x, y) pair
+            x1, y1 = p1
+            x2, y2 = p2
 
         delta_x = x2 - x1
         delta_y = y2 - y1
@@ -118,7 +132,7 @@ class Line:
         pixels. Output is a list representing pixels forming a straight line path from ``point_1`` to ``point_2``
         """
 
-        slope = Line([point_1, point_2]).slope  # Create Line just to get slope between two points
+        slope = Line(endpoints=[point_1, point_2], pixels=[point_1, point_2]).slope  # Create Line just to get slope between two points
 
         if not isinstance(point_1, Point) and not isinstance(point_2, Point):
             point_1 = Point(row=point_1[1], col=point_1[0])
@@ -127,17 +141,39 @@ class Line:
         if slope is np.inf:
             ordered_points = sorted([point_1, point_2], key=lambda point: point.row)
             return Line(
-                [Point(row=row, col=point_1.col) for row in range(ordered_points[0].row, ordered_points[1].row)])
+                pixels=[Point(row=row, col=point_1.col) for row in range(ordered_points[0].row, ordered_points[1].row)],
+                endpoints=(point_1, point_2))
 
         elif abs(slope) >= 1:
             ordered_points = sorted([point_1, point_2], key=lambda point: point.row)
-            return Line.bresenham_line_y_dominant(*ordered_points, slope)
+            pixels =  Line.bresenham_line_y_dominant(*ordered_points, slope)
 
         elif abs(slope) < 1:
             ordered_points = sorted([point_1, point_2], key=lambda point: point.col)
-            return Line.bresenham_line_x_dominant(*ordered_points, slope)
+            pixels =  Line.bresenham_line_x_dominant(*ordered_points, slope)
+        return Line(pixels=pixels, endpoints=(point_1, point_2))
 
-    @staticmethod
+    def interpolate_pixels(self, point_1, point_2):
+        slope = Line(endpoints=[point_1, point_2], pixels=[point_1, point_2]).slope  # Create Line just to get slope between two points
+
+        if not isinstance(point_1, Point) and not isinstance(point_2, Point):
+            point_1 = Point(row=point_1[1], col=point_1[0])
+            point_2 = Point(row=point_2[1], col=point_2[0])
+
+        if slope is np.inf:
+            ordered_points = sorted([point_1, point_2], key=lambda point: point.row)
+            pixels = [Point(row=row, col=point_1.col) for row in range(ordered_points[0].row, ordered_points[1].row)]
+
+        elif abs(slope) >= 1:
+            ordered_points = sorted([point_1, point_2], key=lambda point: point.row)
+            pixels =  Line.bresenham_line_y_dominant(*ordered_points, slope)
+
+        elif abs(slope) < 1:
+            ordered_points = sorted([point_1, point_2], key=lambda point: point.col)
+            pixels =  Line.bresenham_line_x_dominant(*ordered_points, slope)
+
+        return pixels
+
     def bresenham_line_x_dominant(point_1, point_2, slope):
         """
         bresenham algorithm implementation when change in x is larger than change in y
@@ -163,8 +199,8 @@ class Line:
                 y += deltay_sign
                 error -= 1
         pixels = [Point(row=y, col=x) for x, y in line]
-
-        return Line(pixels=pixels)
+        return pixels
+        # return Line(pixels=pixels, endpoints=(point_1, point_2))
 
     @staticmethod
     def bresenham_line_y_dominant(point_1, point_2, slope):
@@ -192,8 +228,9 @@ class Line:
                 x += deltax_sign
                 error -= 1
         pixels = [Point(row=y, col=x) for x, y in line]
+        return pixels
 
-        return Line(pixels=pixels)
+        # return Line(pixels=pixels, endpoints=(point_1, point_2))
 
 
 class OpencvToSkimageHoughLineAdapter:
