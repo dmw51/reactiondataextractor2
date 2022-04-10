@@ -43,13 +43,14 @@ class Graph(ABC):
     :type graph_dict: dict
     """
 
-    def __init__(self, graph_dict=None):
-        if graph_dict is None:
-            graph_dict = {}
-        self._graph_dict = graph_dict
+    def __init__(self):
+        self.nodes = {}
+        self.adjacency = {}
+        self._node_idx = 0
+
 
     @abstractmethod
-    def _generate_edge(self, *args) :
+    def _generate_edge(self, *args):
         """
         This method should update the graph dict with a connection between vertices,
         possibly adding some edge annotation.
@@ -59,7 +60,7 @@ class Graph(ABC):
     @abstractmethod
     def edges(self):
         """
-        This method should return all edges (partially via invoking the `_generate_edge` method).
+        This method should return all edges.
         """
         return NotImplemented
 
@@ -68,13 +69,11 @@ class Graph(ABC):
         """
         A graph needs to have a __str__ method to constitute a valid output representation.
         """
-    @property
-    def nodes(self):
-        return self._graph_dict.keys()
 
-    def add_vertex(self, vertex):
-        if vertex not in self._graph_dict:
-            self._graph_dict[vertex] = []
+    def add_node(self, node):
+        if node not in self.nodes:
+            self.nodes[node] = self._node_idx
+            self._node_idx += 1
 
     def find_isolated_vertices(self):
         """
@@ -84,18 +83,18 @@ class Graph(ABC):
         graph = self._graph_dict
         return [key for key in graph if graph[key] == []]
 
-    def find_path(self, vertex1, vertex2, path=None):
+    def find_path(self, node1, node2, path=None):
         if path is None:
             path = []
-        path += [vertex1]
+        path += [node1]
         graph = self._graph_dict
-        if vertex1 not in graph:
+        if node1 not in graph:
             return None
-        if vertex2 in graph[vertex1]:
-            return path + [vertex2]
+        if node2 in graph[node1]:
+            return path + [node2]
         else:
-            for value in graph[vertex1]:
-                return self.find_path(value, vertex2, path)
+            for value in graph[node1]:
+                return self.find_path(value, node2, path)
 
 
 class ReactionScheme(Graph):
@@ -107,31 +106,37 @@ class ReactionScheme(Graph):
     :type diags: list[Diagram]
     :param fig: Analysed figure
     :type fig: Figure"""
-    def __init__(self, arrows, diags, fig):
-        self._conditions = arrows
-        self._diags = diags
+    def __init__(self, fig, reaction_steps):
+        # self._conditions = arrows
+        # self._diags = diags
         super().__init__()
-        self._reaction_steps = ([self._scan_form_reaction_step(arrow)
-                                           for arrow in arrows])
+        self._reaction_steps = reaction_steps
         # self._pretty_reaction_steps = PrettyList(self._reaction_steps)
         self.create_graph()
         self._start = None  # start node(s) in a graph
         self._end = None   # end node(s) in a graph
         self._fig = fig
-        graph = self._graph_dict
-        self.set_start_end_nodes()
+        # self.set_start_end_nodes()
 
-        self._single_path = True if len(self._start) == 1 and len(self._end) == 1 else False
+        # self._single_path = True if len(self._start) == 1 and len(self._end) == 1 else False
 
     def edges(self):
-        if not self._graph_dict:
-            self.create_graph()
-
-        return {k: v for k, v in self._graph_dict.items()}
+        return self.adjacency
+    #     if not self._graph_dict:
+    #         self.create_graph()
+    #
+    #     return {k: v for k, v in self._graph_dict.items()}
 
     def _generate_edge(self, key, successor):
+        key = self.nodes[key]
+        successor = self.nodes[successor]
 
-        self._graph_dict[key].append(successor)
+        if self.adjacency.get(key):
+            self.adjacency[key].append(successor)
+        else:
+            self.adjacency[key] = [successor]
+
+        # self._graph_dict[key].append(successor)
 
     def __repr__(self):
         return f'ReactionScheme({self._reaction_steps})'
@@ -143,18 +148,18 @@ class ReactionScheme(Graph):
         # else:
         return '\n'.join([str(reaction_step) for reaction_step in self._reaction_steps])
 
-    def __eq__(self, other):
-        if isinstance(other, ReactionScheme):
-            return other._graph_dict == self._graph_dict
-        return False
+    # def __eq__(self, other):
+    #     if isinstance(other, ReactionScheme):
+    #         return other._graph_dict == self._graph_dict
+    #     return False
 
     @property
     def reaction_steps(self):
         return self._reaction_steps
 
-    @property
-    def graph(self):
-        return self._graph_dict
+    # @property
+    # def graph(self):
+    #     return self._graph_dict
 
     @property
     def reactants(self):
@@ -168,62 +173,60 @@ class ReactionScheme(Graph):
         """Longer str method - contains more information (eg conditions)"""
         return f'{self._reaction_steps}'
 
-    def draw_segmented(self, out=False):
-        """Draw the segmented figure. If ``out`` is True, the figure is returned and can be saved"""
-        y_size, x_size = self._fig.img.shape
-        f, ax = plt.subplots(figsize=(x_size/100, y_size/100))
-        ax.imshow(self._fig.img, cmap=plt.cm.binary)
-        params = {'facecolor': 'g', 'edgecolor': None, 'alpha': 0.3}
-        for step_conditions in self._conditions:
-            panel = step_conditions.arrow.panel
-            rect_bbox = Rectangle((panel.left, panel.top), panel.right - panel.left, panel.bottom - panel.top,
-                                  facecolor='y', edgecolor=None, alpha=0.4)
-            ax.add_patch(rect_bbox)
-
-            for t in step_conditions.text_lines:
-                panel = t.panel
-                rect_bbox = Rectangle((panel.left - 1, panel.top - 1), panel.right - panel.left,
-                                      panel.bottom - panel.top, **params)
-                ax.add_patch(rect_bbox)
-            # for panel in step_conditions.structure_panels:
-            #     rect_bbox = Rectangle((panel.left - 1, panel.top - 1), panel.right - panel.left,
-            #                           panel.bottom - panel.top, **params)
-            #     ax.add_patch(rect_bbox)
-
-        params = {'facecolor': (66 / 255, 93 / 255, 166 / 255),
-                  'edgecolor': (6 / 255, 33 / 255, 106 / 255),
-                  'alpha': 0.4}
-        for diag in self._diags:
-            panel = diag.panel
-            rect_bbox = Rectangle((panel.left, panel.top), panel.right - panel.left, panel.bottom - panel.top,
-                                  facecolor=(52/255, 0, 103/255), edgecolor=(6/255, 0, 99/255), alpha=0.4)
-            ax.add_patch(rect_bbox)
-            if diag.label:
-                panel = diag.label.panel
-                rect_bbox = Rectangle((panel.left - 1, panel.top - 1), panel.right - panel.left,
-                                      panel.bottom - panel.top, **params)
-                ax.add_patch(rect_bbox)
-        ax.axis('off')
-        if out:
-            return f
-        else:
-            plt.show()
+    # def draw_segmented(self, out=False):
+    #     """Draw the segmented figure. If ``out`` is True, the figure is returned and can be saved"""
+    #     y_size, x_size = self._fig.img.shape
+    #     f, ax = plt.subplots(figsize=(x_size/100, y_size/100))
+    #     ax.imshow(self._fig.img, cmap=plt.cm.binary)
+    #     params = {'facecolor': 'g', 'edgecolor': None, 'alpha': 0.3}
+    #     for step_conditions in self._conditions:
+    #         panel = step_conditions.arrow.panel
+    #         rect_bbox = Rectangle((panel.left, panel.top), panel.right - panel.left, panel.bottom - panel.top,
+    #                               facecolor='y', edgecolor=None, alpha=0.4)
+    #         ax.add_patch(rect_bbox)
+    #
+    #         for t in step_conditions.text_lines:
+    #             panel = t.panel
+    #             rect_bbox = Rectangle((panel.left - 1, panel.top - 1), panel.right - panel.left,
+    #                                   panel.bottom - panel.top, **params)
+    #             ax.add_patch(rect_bbox)
+    #         # for panel in step_conditions.structure_panels:
+    #         #     rect_bbox = Rectangle((panel.left - 1, panel.top - 1), panel.right - panel.left,
+    #         #                           panel.bottom - panel.top, **params)
+    #         #     ax.add_patch(rect_bbox)
+    #
+    #     params = {'facecolor': (66 / 255, 93 / 255, 166 / 255),
+    #               'edgecolor': (6 / 255, 33 / 255, 106 / 255),
+    #               'alpha': 0.4}
+    #     for diag in self._diags:
+    #         panel = diag.panel
+    #         rect_bbox = Rectangle((panel.left, panel.top), panel.right - panel.left, panel.bottom - panel.top,
+    #                               facecolor=(52/255, 0, 103/255), edgecolor=(6/255, 0, 99/255), alpha=0.4)
+    #         ax.add_patch(rect_bbox)
+    #         if diag.label:
+    #             panel = diag.label.panel
+    #             rect_bbox = Rectangle((panel.left - 1, panel.top - 1), panel.right - panel.left,
+    #                                   panel.bottom - panel.top, **params)
+    #             ax.add_patch(rect_bbox)
+    #     ax.axis('off')
+    #     if out:
+    #         return f
+    #     else:
+    #         plt.show()
 
     def create_graph(self):
         """
         Unpack reaction steps to create a graph from individual steps
         :return: completed graph dictionary
         """
-        graph = self._graph_dict
+
         for step in self._reaction_steps:
-            [self.add_vertex(PrettyFrozenSet(species_group)) for species_group in step]
-            self.add_vertex(step.conditions)
+            [self.add_node(species_group) for species_group in step]
+            self.add_node(step.conditions)
 
         for step in self._reaction_steps:
             self._generate_edge(step.reactants, step.conditions)
             self._generate_edge(step.conditions, step.products)
-
-        return graph
 
     def set_start_end_nodes(self):
         """
@@ -361,58 +364,58 @@ class ReactionScheme(Graph):
 
         # return smirks, [node.conditions_dct for node in graph if isinstance(node, Conditions)]
 
-    def _scan_form_reaction_step(self, arrow):
-        """
-        Scans an image around a single arrow to give reactants and products in a single reaction step
-        :param BaseArrow arrow: BaseArrow object or a child class instance around which the scan is performed
-        :return: arrows and diagrams packed inside a reaction step
-        :rtype: ReactionStep
-        """
-        # arrow = step_conditions.arrow
-        diags = self._diags
-
-        # endpoint1, endpoint2 = extend_line(step_conditions.arrow.line,
-        #                                    extension=arrow.pixels[0].separation(arrow.pixels[-1]) * 0.75)
-        # react_side_point = step_conditions.arrow.react_side[0]
-        # endpoint1_close_to_react_side = endpoint1.separation(react_side_point) < endpoint2.separation(react_side_point)
-        # if endpoint1_close_to_react_side:
-        #     react_endpoint, prod_endpoint = endpoint1, endpoint2
-        # else:
-        #     react_endpoint, prod_endpoint = endpoint2, endpoint1
-
-        react_endpoint, prod_endpoint = arrow.center, arrow.reference_pt
-
-        initial_distance = SchemeConfig.SEARCH_DISTANCE_FACTOR * np.sqrt(np.mean([panel.area for panel in diags]))
-        # extended_distance = 4 * np.sqrt(np.mean([diag.panel.area for diag in diags]))
-        extended_distance = initial_distance * 2
-        distance_fn = lambda panel: initial_distance
-        distances = initial_distance, distance_fn
-        extended_distances = extended_distance, distance_fn
-        nearby_diags = find_nearby_ccs(arrow.panel, diags, distances)
-
-        # reactants = find_nearby_ccs(react_endpoint, diags, distances,
-        #                             condition=lambda diag: diag.panel.role != ReactionRoleEnum.CONDITIONS)
-        reactants, products = self.separate_ccs(nearby_diags, react_endpoint, prod_endpoint)
-        # if not reactants:
-        #     reactants = find_nearby_ccs(react_endpoint, diags, extended_distances,
-        #                                 condition=lambda diag: diag.panel.role != ReactionRoleEnum.CONDITIONS)
-        # if not reactants:
-        #     reactants = self._search_elsewhere('up-right', step_conditions.arrow, distances)
-        #
-        # products = find_nearby_ccs(prod_endpoint, diags, distances,
-        #                            condition=lambda diag: diag.panel.role != ReactionRoleEnum.CONDITIONS)
-        # #
-        # if not products:
-        #     products = find_nearby_ccs(prod_endpoint, diags, extended_distances,
-        #                                condition=lambda diag: diag.panel.role != ReactionRoleEnum.CONDITIONS)
-        #
-        # if not products:
-        #     products = self._search_elsewhere('down-left', step_conditions.arrow, distances)
-        #
-        [setattr(reactant, 'role', ReactionRoleEnum.STEP_REACTANT) for reactant in reactants]
-        [setattr(product, 'role', ReactionRoleEnum.STEP_PRODUCT) for product in products]
-
-        return ReactionStep(reactants, products, conditions=arrow.conditions)
+    # def _scan_form_reaction_step(self, arrow):
+    #     """
+    #     Scans an image around a single arrow to give reactants and products in a single reaction step
+    #     :param BaseArrow arrow: BaseArrow object or a child class instance around which the scan is performed
+    #     :return: arrows and diagrams packed inside a reaction step
+    #     :rtype: ReactionStep
+    #     """
+    #     # arrow = step_conditions.arrow
+    #     diags = self._diags
+    #
+    #     # endpoint1, endpoint2 = extend_line(step_conditions.arrow.line,
+    #     #                                    extension=arrow.pixels[0].separation(arrow.pixels[-1]) * 0.75)
+    #     # react_side_point = step_conditions.arrow.react_side[0]
+    #     # endpoint1_close_to_react_side = endpoint1.separation(react_side_point) < endpoint2.separation(react_side_point)
+    #     # if endpoint1_close_to_react_side:
+    #     #     react_endpoint, prod_endpoint = endpoint1, endpoint2
+    #     # else:
+    #     #     react_endpoint, prod_endpoint = endpoint2, endpoint1
+    #
+    #     react_endpoint, prod_endpoint = arrow.center, arrow.reference_pt
+    #
+    #     initial_distance = SchemeConfig.SEARCH_DISTANCE_FACTOR * np.sqrt(np.mean([panel.area for panel in diags]))
+    #     # extended_distance = 4 * np.sqrt(np.mean([diag.panel.area for diag in diags]))
+    #     extended_distance = initial_distance * 2
+    #     distance_fn = lambda panel: initial_distance
+    #     distances = initial_distance, distance_fn
+    #     extended_distances = extended_distance, distance_fn
+    #     nearby_diags = find_nearby_ccs(arrow.panel, diags, distances)
+    #
+    #     # reactants = find_nearby_ccs(react_endpoint, diags, distances,
+    #     #                             condition=lambda diag: diag.panel.role != ReactionRoleEnum.CONDITIONS)
+    #     reactants, products = self.separate_ccs(nearby_diags, react_endpoint, prod_endpoint)
+    #     # if not reactants:
+    #     #     reactants = find_nearby_ccs(react_endpoint, diags, extended_distances,
+    #     #                                 condition=lambda diag: diag.panel.role != ReactionRoleEnum.CONDITIONS)
+    #     # if not reactants:
+    #     #     reactants = self._search_elsewhere('up-right', step_conditions.arrow, distances)
+    #     #
+    #     # products = find_nearby_ccs(prod_endpoint, diags, distances,
+    #     #                            condition=lambda diag: diag.panel.role != ReactionRoleEnum.CONDITIONS)
+    #     # #
+    #     # if not products:
+    #     #     products = find_nearby_ccs(prod_endpoint, diags, extended_distances,
+    #     #                                condition=lambda diag: diag.panel.role != ReactionRoleEnum.CONDITIONS)
+    #     #
+    #     # if not products:
+    #     #     products = self._search_elsewhere('down-left', step_conditions.arrow, distances)
+    #     #
+    #     [setattr(reactant, 'role', ReactionRoleEnum.STEP_REACTANT) for reactant in reactants]
+    #     [setattr(product, 'role', ReactionRoleEnum.STEP_PRODUCT) for product in products]
+    #
+    #     return ReactionStep(reactants, products, conditions=arrow.conditions)
 
     def separate_ccs(self, ccs, point1, point2):
         """Separates Panel objects in `ccs` into two groups based on proximity to one of the two points `point1` and
