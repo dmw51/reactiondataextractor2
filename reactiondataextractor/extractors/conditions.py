@@ -14,20 +14,14 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import unicode_literals
 
-from collections import Counter
-from collections.abc import Iterable, Sequence
+from collections.abc import Sequence
 from itertools import chain
 import logging
 from matplotlib.patches import Rectangle
-import numpy as np
-import os
 import re
 
 # from chemdataextractor.doc import Span
 # from chemdataextractor.nlp.tokenize import ChemWordTokenizer
-from scipy.signal import find_peaks
-from sklearn.neighbors import KernelDensity
-from sklearn.model_selection import GridSearchCV
 
 # from ..actions import find_nearby_ccs, extend_line
 # from ..models import Conditions, SolidArrow, BaseExtractor, Figure, TextLine, Crop, FigureRoleEnum, ReactionRoleEnum, Panel
@@ -36,8 +30,8 @@ from sklearn.model_selection import GridSearchCV
 # from ..utils.processing import find_minima_between_peaks, erase_elements
 # from .. import settings
 from reactiondataextractor.config import ExtractorConfig
-from reactiondataextractor.extractors.base import BaseExtractor
-from reactiondataextractor.models.segments import ReactionRoleEnum, FigureRoleEnum
+from reactiondataextractor.models.base import BaseExtractor, TextRegion
+from reactiondataextractor.models.segments import FigureRoleEnum
 from reactiondataextractor.ocr import img_to_text, CONDITIONS_WHITELIST
 from reactiondataextractor.utils import DisabledNegativeIndices, erase_elements
 
@@ -71,9 +65,8 @@ class ConditionsExtractor(BaseExtractor):
             #handled by the unified model; is IoU enough?
             if step_conditions:
                 conditions.append(step_conditions)
-                cand.parent_panel.conditions = step_conditions
             else:
-                cand.parent_panel.conditions = Conditions(conditions_dct={}, panel=None, parent_panel=cand.parent_panel)
+                conditions.append(Conditions(conditions_dct={}, panel=cand.panel))
             # conditions_structures.extend(step_structures)
         self._extracted = conditions#, conditions_structures
         return self.extracted
@@ -651,7 +644,7 @@ def clear_conditions_region(fig):
     return erase_elements(fig_no_cond, noise)
 
 
-class Conditions:
+class Conditions(TextRegion):
     """
     This class describes conditions region and associated text
 
@@ -665,16 +658,20 @@ class Conditions:
     :type diags: list[Panel]
     """
 
-    def __init__(self, panel, conditions_dct, parent_panel, text=None, diags=None, _prior_class=None):
+    def __init__(self, panel, conditions_dct, parent_panel=None, text=None, diags=None, _prior_class=None):
         self.panel = panel
         self.text = text
         self.conditions_dct = conditions_dct
-        self._parent_panel = parent_panel
+
         self._prior_class = _prior_class
 
         if diags is None:
             diags = []
         self._diags = diags
+
+        self._parent_panel = parent_panel
+        # if parent_panel:
+        #     parent_panel.children.append(self)
 
 
 

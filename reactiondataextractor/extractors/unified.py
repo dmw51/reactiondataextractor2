@@ -2,22 +2,19 @@
 import copy
 import os
 import warnings
-from collections.abc import Iterable
 from itertools import product
 from math import ceil
 import re
-from pathlib import Path
 
-import cv2
 import numpy as np
 import torch
 from detectron2.config import get_cfg
+from matplotlib import pyplot as plt
 from torch import Tensor
 
 cfg = get_cfg()
 cfg.MODEL.DEVICE = 'cpu'
 from detectron2.engine import DefaultPredictor
-from detectron2.checkpoint import DetectionCheckpointer
 from detectron2.structures.instances import  Instances
 from detectron2.structures.boxes import Boxes
 from matplotlib.patches import Rectangle
@@ -25,16 +22,16 @@ from scipy.stats import mode
 from detectron2 import model_zoo
 
 
-from .base import BaseExtractor, Candidate
+from reactiondataextractor.models.base import BaseExtractor, Candidate
 from .conditions import ConditionsExtractor
 # from .labels import LabelExtractor
 from .labels import LabelExtractor
-from ..config import ExtractorConfig, Config
+from ..config import ExtractorConfig
 # from ..models.ml_models.unified_detection import RDEModel, RSchemeConfig
 from ..models.reaction import Diagram, Conditions, Label
 from ..models.segments import Panel, Rect, FigureRoleEnum, Crop, PanelMethodsMixin
 from ..utils import skeletonize_area_ratio, dilate_fig, erase_elements, find_relative_directional_position, \
-    find_points_on_line, compute_ioa, lies_along_arrow_normal
+    compute_ioa, lies_along_arrow_normal
 
 parent_dir = os.path.dirname(os.path.abspath(__file__))
 # superatom_file = os.path.join(parent_dir, '..', 'dict', 'superatom.txt')
@@ -42,10 +39,11 @@ superatom_file = os.path.join(parent_dir, '..', 'dict', 'filter_superatoms.txt')
 
 class UnifiedExtractor(BaseExtractor):
 
-    def __init__(self, fig, all_arrows):
+    def __init__(self, fig, all_arrows, use_tiler=True):
         super().__init__(fig)
         # self.model = self.load_model(ExtractorConfig.UNIFIED_EXTR_MODEL_WT_PATH)
-        self.model = Detectron2Adapter(fig)
+        self.model = Detectron2Adapter(fig, use_tiler)
+
 
         # DetectionCheckpointer(self.model).load(ExtractorConfig.UNIFIED_EXTR_MODEL_WT_PATH)
         # self.model.eval()
@@ -78,7 +76,9 @@ class UnifiedExtractor(BaseExtractor):
         text_regions = [TextRegionCandidate(box, class_) for box, class_ in zip(boxes, classes)
                         if self._class_dict[class_] in [Label, Conditions]]
         conditions, labels = self.postprocess_text_regions(text_regions)
-        self.add_diags_to_conditions(diags, conditions)
+        self.set_parents_for_text_regions(conditions, self.all_arrows)
+        self.set_parents_for_text_regions(labels, diags)
+        self.add_diags_to_conditions(diags, self.all_arrows)
         # adjusted_candidates = self.adjust_bboxes(conditions_labels)
         # conditions, labels = self.reclassify(adjusted_candidates, self.all_arrows, diags)
         # conditions, labels = [self.remove_duplicates(group) for group in [conditions, labels]]
@@ -86,11 +86,11 @@ class UnifiedExtractor(BaseExtractor):
         #                       in zip([conditions, labels], [self.conditions_extractor, self.label_extractor])]
         return diags, conditions, labels
 
-    def add_diags_to_conditions(self, diags, conditions):
+    def add_diags_to_conditions(self, diags, arrows):
         for diag in diags:
-            for cond in conditions:
-                if lies_along_arrow_normal(cond.arrow, diag) and diag.edge_separation(cond.arrow.panel) < ExtractorConfig.ARROW_DIAG_MAX_DISTANCE:
-                    cond.panel = Panel.create_megapanel([cond.panel, diag.panel], fig=cond.panel.fig)
+            for arrow in arrows:
+                if lies_along_arrow_normal(arrow, diag) and diag.edge_separation(arrow.panel) < ExtractorConfig.ARROW_DIAG_MAX_DISTANCE:
+                    arrow.children.append(diag)
 
     def postprocess_diagrams(self, out_diag_boxes):
         """Postprocess diagram bounding boxes from the detectron model"""
@@ -110,22 +110,29 @@ class UnifiedExtractor(BaseExtractor):
                               in zip([conditions, labels], [self.conditions_extractor, self.label_extractor])]
         self.conditions_extractor._extracted = self.filter_text_false_positives(conditions, self.diagram_extractor.extracted)
         self.label_extractor._extracted = self.filter_text_false_positives(labels, self.diagram_extractor.extracted)
-        ext_cond = self.conditions_extractor.extracted
+        # extr_cond = self.conditions_extractor.extracted
+        # extr_labels = self.label_extractor.extracted
         ### Pack into a method  - This is not the exact solution, consider when i-th region gets merged with n > 1 regions
-        merged_cond = []
-        unmerged_idx = list(range(len(ext_cond)))
-        for i in range(len(ext_cond)):
-            for j in range(i+1, len(ext_cond)):
-                if ext_cond[i].panel.edge_separation(ext_cond[j].panel) < 150 and ext_cond[i].arrow == ext_cond[j].arrow:
-                    unmerged_idx.remove(i)
-                    unmerged_idx.remove(j)
-                    merged_cond.append(ext_cond[i].merge_conditions_regions(ext_cond[j]))
-        for i in unmerged_idx:
-            merged_cond.append(ext_cond[i])
-        self.conditions_extractor._extracted = merged_cond
+        # merged_cond = []
+        # unmerged_idx = list(range(len(extr_cond)))
+        ##Introduce merge_children based on the criteria below
+        # for i in range(len(extr_cond)):
+        #     for j in range(i+1, len(extr_cond)):
+        #         if extr_cond[i].panel.edge_separation(extr_cond[j].panel) < 150 and extr_cond[i].arrow == extr_cond[j].arrow:
+        #             unmerged_idx.remove(i)
+        #             unmerged_idx.remove(j)
+        #             merged_cond.append(extr_cond[i].merge_conditions_regions(extr_cond[j]))
+        # for i in unmerged_idx:
+        #     merged_cond.append(extr_cond[i])
+        # self.conditions_extractor._extracted
         ###
 
         return self.conditions_extractor.extracted, self.label_extractor.extracted
+
+    def set_parents_for_text_regions(self, text_regions, possible_parents):
+        """Assigns each text region to a diagram (for labels) or arrow (for conditions) parent object"""
+        for region in text_regions:
+            region.set_nearest_as_parent(possible_parents)
 
     def filter_text_false_positives(self, text_regions, diags):
         """Filter out parts of diagrams (usually superatom labels) falsely marked as conditions or labels.
@@ -141,6 +148,8 @@ class UnifiedExtractor(BaseExtractor):
             text = region.text
             if isinstance(text, list):
                 text = ' '.join(text)
+            if text is None:
+                continue
             plus_matched = re.search(r'\+', text)
             if plus_matched and len(text) < 4:
                 filtered_regions.remove(region)
@@ -278,17 +287,13 @@ class UnifiedExtractor(BaseExtractor):
             closest_diag = self._find_closest(cand, all_diags)
             cand_class = self._adjust_class(cand, ({'arrow': closest_arrow, 'diag': closest_diag}))
 
-            cand.set_parent_panel({'arrow': closest_arrow, 'diag': closest_diag}, cand_class)
+            # cand.set_parent_panel({'arrow': closest_arrow, 'diag': closest_diag}, cand_class)
             ## Try OCR on all of them, then postprocess accordingly and instantiate?
             # reclassified.append(cand_class(**cand.pass_attributes()))
             if cand_class == Conditions:
                 conditions.append(cand)
             else:
                 labels.append(cand)
-
-
-
-
 
         return conditions, labels
 
@@ -359,6 +364,46 @@ class UnifiedExtractor(BaseExtractor):
         #     class_ = self._class_dict[obj._prior_class]
 
         return class_
+
+
+    def visualize_diag_label_matching(self, diag):
+        _X_SEPARATION = 50
+        elements = [diag] + diag.labels
+        orig_coords = [e.panel.in_original_fig() for e in elements]
+
+        canvas_width = np.sum([c[3] - c[1] for c in orig_coords]) + _X_SEPARATION * (len(elements) - 1)
+        canvas_height = max([c[2] - c[0] for c in orig_coords])
+
+        canvas = np.zeros([canvas_height, canvas_width])
+        x_end = 0
+
+        self._place_panel_on_canvas(diag.panel, canvas, self.fig,  (x_end, 0))
+        orig_coords = diag.panel.in_original_fig()
+        x_end += orig_coords[3] - orig_coords[1] + _X_SEPARATION
+
+        for label in diag.labels:
+            self._place_panel_on_canvas(label.panel, canvas, self.fig, (x_end, 0))
+            orig_coords = label.panel.in_original_fig()
+            x_end += orig_coords[3] - orig_coords[1] + _X_SEPARATION
+
+        return canvas
+
+    def visualize_label_matchings(self, diagrams):
+        canvases = [self.visualize_diag_label_matching(diag) for diag in diagrams]
+        _Y_SEPARATION = 50
+        out_canvas_height = np.sum([c.shape[0] for c in canvases]) + _Y_SEPARATION * (len(canvases) - 1)
+        out_canvas_width = np.max([c.shape[1] for c in canvases])
+        out_canvas = np.zeros([out_canvas_height, out_canvas_width])
+        y_end = 0
+        for canvas in canvases:
+            h, w = canvas.shape
+            out_canvas[y_end:y_end + h, 0:0 + w] = canvas
+            y_end += h + _Y_SEPARATION
+
+        plt.imshow(out_canvas)
+        plt.show()
+
+
     def _find_closest(self, obj, other_objects):
         """
         Measure the distance between 'panel' and 'other_objects' to find the object that is closest to the `panel`
@@ -375,6 +420,17 @@ class UnifiedExtractor(BaseExtractor):
             elif isinstance(o, Label):
                 labels.append(o)
         return conditions, labels
+
+    def _place_panel_on_canvas(self, panel, canvas,fig,  left_top):
+
+        ## Specify coords of the paste region
+        x, y = left_top
+        w, h = panel.width, panel.height
+
+        ## Specify coords of the crop region
+        top, left, bottom, right = panel
+
+        canvas[y:y+h, x:x+w] = fig.img[top:bottom, left:right]
 
 
 class DiagramExtractor(BaseExtractor):
@@ -560,6 +616,7 @@ class DiagramExtractor(BaseExtractor):
 
             return num_iterations
 
+
 class TextRegionCandidate(Candidate, PanelMethodsMixin):
     """This class is used to represent regions which consist of text and contain either labels or reaction conditions.
     This is determined at a later stage and attributes from each object are transferred to the new instances. In the
@@ -568,17 +625,8 @@ class TextRegionCandidate(Candidate, PanelMethodsMixin):
     def __init__(self, bbox, class_):
         self.panel = Panel(bbox)
         self._prior_class = class_
-        self.parent_panel = None
+        # self.parent_panel = None
 
-    def set_parent_panel(self, closest_panels, posterior_class):
-        """Sets parent panel by choosing either the closest arrow or diagrams based on the posterior class of this object"""
-        if posterior_class == Conditions:
-            parent = closest_panels['arrow']
-        elif posterior_class == Label:
-            parent = closest_panels['diag']
-        else:
-            raise TypeError("Could not assign match class to a parent panel type")
-        self.parent_panel = parent
 
 
 class Detectron2Adapter:
@@ -607,9 +655,10 @@ class Detectron2Adapter:
 
     ###
 
-    def __init__(self, fig):
+    def __init__(self, fig, use_tiler=True):
         self.model = DefaultPredictor(self.cfg)
         self.fig = fig
+        self.use_tiler = use_tiler
 
     def detect(self):
         boxes, classes, scores = self._detect()
@@ -653,14 +702,15 @@ class Detectron2Adapter:
             # From big labels, estimate line height and then grab all single line labels from tiles
             # Merge tiled labels if they span multiple tiles
             predictions = predictions['instances']
-            tiler = ImageTiler(self.fig.img_detectron, ExtractorConfig.TILER_MAX_TILE_DIMS, predictions)
-            tiles = tiler.create_tiles()
-            tile_preds = [self.model(t) for t in tiles]
+            if self.use_tiler:
+                tiler = ImageTiler(self.fig.img_detectron, ExtractorConfig.TILER_MAX_TILE_DIMS, predictions)
+                tiles = tiler.create_tiles()
+                tile_preds = [self.model(t) for t in tiles]
 
-            tile_predictions = tiler.transform_tile_predictions(tile_preds)
-            tile_predictions = tiler.filter_small_boxes(tile_predictions)
-            combined_preds = self.combine_predictions(predictions, tile_predictions)
-        return combined_preds.pred_boxes.tensor.numpy(), combined_preds.pred_classes.numpy(), combined_preds.scores.numpy()
+                tile_predictions = tiler.transform_tile_predictions(tile_preds)
+                tile_predictions = tiler.filter_small_boxes(tile_predictions)
+                predictions = self.combine_predictions(predictions, tile_predictions)
+        return predictions.pred_boxes.tensor.numpy(), predictions.pred_classes.numpy(), predictions.scores.numpy()
 
     def postprocess(self, boxes):
 

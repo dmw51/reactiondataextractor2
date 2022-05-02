@@ -14,7 +14,6 @@ Beard (ejb207@cam.ac.uk)
 
 """
 import csv
-import itertools
 import logging
 from copy import deepcopy
 
@@ -26,9 +25,8 @@ from urllib.error import URLError
 # from chemdataextractor.doc.text import Token
 import cirpy
 
-from .base import BaseExtractor
-from ..models.reaction import Diagram, Label
-from ..models.segments import ReactionRoleEnum, FigureRoleEnum, Panel, Rect, Crop
+from reactiondataextractor.models.base import BaseExtractor
+from ..models.reaction import Label
 from ..ocr import ASSIGNMENT, SEPARATORS, CONCENTRATION, LABEL_WHITELIST, img_to_text
 # from ..utils.processing import dilate_fragments
 # from .. import settings
@@ -73,8 +71,7 @@ class LabelExtractor(BaseExtractor):
         for cand_region, label in zip(self.priors, deepcopy(labels)):
             if len(label.text) == 1 and label.text[0] == '+':  # Filter out solitary plus signs
                 labels.remove(label)
-            else:
-                cand_region.parent_panel.label = label
+
         # diagrams = [Diagram(panel=structure, label=self.find_label(structure), crop=Crop(self.fig, structure))
         #             for structure in self.react_prods_structures]
         # diagrams_conditions = [Diagram(panel=structure, label=None, crop=Crop(self.fig, structure))

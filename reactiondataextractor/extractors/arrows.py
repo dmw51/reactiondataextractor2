@@ -10,7 +10,6 @@ import abc
 import copy
 import logging
 from itertools import product
-from operator import itemgetter
 
 import cv2
 import numpy as np
@@ -20,7 +19,7 @@ from scipy.ndimage import label
 # from tensorflow.keras.models import load_model
 from torch import load, device
 from reactiondataextractor.config import ExtractorConfig, Config
-from reactiondataextractor.extractors.base import BaseExtractor, Candidate
+from reactiondataextractor.models.base import BaseExtractor, Candidate
 from reactiondataextractor.models.exceptions import NotAnArrowException
 from reactiondataextractor.models.segments import FigureRoleEnum, PanelMethodsMixin, Panel, Figure
 from reactiondataextractor.utils import skeletonize, is_a_single_line
@@ -358,7 +357,26 @@ class BaseArrow(PanelMethodsMixin):
         self._center_px = None
         self.reference_pt = self.compute_reaction_reference_pt()
         self.initialize()
-        self.conditions = None # set dynamically by ConditionsExtractor
+        self.children = []  # set dynamically
+
+    @property
+    def conditions(self):
+        return self.children
+
+    def merge_children(self):
+        """Merges child regions if they're close together"""
+        # TODO: This is not the exact solution, consider when i-th region gets merged with n > 1 regions
+        new_children = []
+        unmerged_idx = list(range(len(self.children)))
+        for i in range(len(self.children)):
+            for j in range(i+1, len(self.children)):
+                if self.children[i].panel.edge_separation(self.children[j].panel) < 150 and \
+                        self.children[i].arrow == self.children[j].arrow:
+                    unmerged_idx.remove(i)
+                    unmerged_idx.remove(j)
+                    new_children.append(self.children[i].merge_conditions_regions(self.children[j]))
+        for i in unmerged_idx:
+            new_children.append(self.children[i])
 
     @abc.abstractmethod
     def initialize(self):
@@ -469,10 +487,12 @@ class SolidArrow(BaseArrow):
         return f'SolidArrow(pixels={self.pixels[:5]},..., line={self.line}, panel={self.panel})'
 
     def __str__(self):
-        left, right, top, bottom = self.panel
+        top, left, bottom, right = self.panel
         return f'SolidArrow({top, left, bottom, right})'
 
     def __eq__(self, other):
+        if not isinstance(other, BaseArrow):
+            return False
         return self.panel == other.panel
 
     def __hash__(self):
