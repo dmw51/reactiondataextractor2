@@ -123,6 +123,14 @@ class PanelMethodsMixin:
     def area(self):
         return self.panel.area
 
+    @property
+    def height(self):
+        return self.panel.height
+
+    @property
+    def width(self):
+        return self.panel.width
+
     def center_separation(self, obj2):
         return self.panel.center_separation(obj2)
 

@@ -12,6 +12,7 @@ email: dmw51@cam.ac.uk
 import copy
 from abc import ABC, abstractmethod
 from collections import Counter
+from operator import itemgetter
 
 import cv2
 import numpy as np
@@ -71,8 +72,8 @@ class Graph(ABC):
         """
 
     def add_node(self, node):
-        if node not in self.nodes:
-            self.nodes[node] = self._node_idx
+        if frozenset(node) not in self.nodes:
+            self.nodes[frozenset(node)] = self._node_idx
             self._node_idx += 1
 
     def find_isolated_vertices(self):
@@ -128,8 +129,8 @@ class ReactionScheme(Graph):
     #     return {k: v for k, v in self._graph_dict.items()}
 
     def _generate_edge(self, key, successor):
-        key = self.nodes[key]
-        successor = self.nodes[successor]
+        key = self.nodes[frozenset(key)]
+        successor = self.nodes[frozenset(successor)]
 
         if self.adjacency.get(key):
             self.adjacency[key].append(successor)
@@ -147,6 +148,13 @@ class ReactionScheme(Graph):
         #     return '  --->  '.join((' + '.join(str(species) for species in group)) for group in path)
         # else:
         return '\n'.join([str(reaction_step) for reaction_step in self._reaction_steps])
+
+    def __iter__(self):
+        return self
+
+    # TODO: Implement an interator protocol to probe the internal graph structur
+    def __next__(self, next_node=None):
+        pass
 
     # def __eq__(self, other):
     #     if isinstance(other, ReactionScheme):
@@ -436,52 +444,7 @@ class ReactionScheme(Graph):
 
 
 
-    def _search_elsewhere(self, where, arrow, distances):
-        """
-        Looks for structures in a different line of a multi-line reaction scheme.
 
-        If a reaction scheme ends unexpectedly either on the left or right side of an arrows (no species found), then
-        a search is performed in the previous or next line of a reaction scheme respectively (assumes multiple lines
-        in a reaction scheme). Assumes left-to-right reaction scheme. Estimates the optimal alternative search point
-        using arrow and diagrams' coordinates in a DBSCAN search.
-        This gives clusters corresponding to the multiple lines in a reaction scheme. Performs a search in the new spot.
-        :param str where: Allows either 'down-left' to look below and to the left of arrow, or 'up-right' (above to the right)
-        :param Arrow arrow: Original arrow, around which the search failed
-        :param (float, lambda) distances: pair containing initial search distance and a distance function (usually same as
-        in the parent function)
-        :return: Collection of found species
-        :rtype: list[Diagram]
-        """
-        assert where in ['down-left', 'up-right']
-        fig = settings.main_figure[0]
-        diags = self._diags
-
-        X = np.array([s.center[1] for s in diags] + [arrow.panel.center[1]]).reshape(-1, 1)  # the y-coordinate
-        eps = np.mean([s.height for s in diags])
-        dbscan = DBSCAN(eps=eps, min_samples=2)
-        y = dbscan.fit_predict(X)
-        num_labels = max(y) - min(y) + 1  # include outliers (label -1) if any
-        arrow_label = y[-1]
-        clustered = []
-        for val in range(-1, num_labels):
-            if val == arrow_label:
-                continue  # discard this cluster - want to compare the arrow with other clusters only
-            cluster = [centre for centre, label in zip(X, y) if label == val]
-            if cluster:
-                clustered.append(cluster)
-        centres = [np.mean(cluster) for cluster in clustered]
-        centres.sort()
-        if where == 'down-left':
-            move_to_vertical = [centre for centre in centres if centre > arrow.panel.center[1]][0]
-            move_to_horizontal = np.mean([structure.width for structure in diags])
-        elif where == 'up-right':
-            move_to_vertical = [centre for centre in centres if centre < arrow.panel.center[1]][-1]
-            move_to_horizontal = fig.img.shape[1] - np.mean([structure.width for structure in diags])
-        else:
-            raise ValueError("'where' takes in one of two values : ('down-left', 'up-right') only")
-        species = find_nearby_ccs(Point(move_to_vertical, move_to_horizontal), diags, distances)
-
-        return species
 
 class RoleProbe:
     """This is a class used to probe reaction schemes around arrows to assign roles to diagrams and reconstruct
@@ -493,7 +456,8 @@ class RoleProbe:
         self.diagrams = diagrams
         self.stepsize = min([x for diag in self.diagrams for x in (diag.panel.width, diag.panel.height)]) #Step size should be related to width/height of the smallest diagram, whichever is smaller
         # Could also be a function depending on arrow direction, but might not be necessary
-        self.segment_length = np.mean([(d.panel.width + d.panel.height) / 2 for d in self.diagrams])
+        self.segment_length = np.mean([(d.panel.width + d.panel.height) / 2 for d in self.diagrams]) // 2
+        self.reaction_steps = []
         # This should be comparable to the largest dim of the largest diagrams, but might not be
                                 # stable to outliers
 
@@ -506,10 +470,33 @@ class RoleProbe:
 
         region_one_dims = (x_one, y_one)
         regions_two_dims = (x_two, y_two)
-        diags_one = self._probe_around_arrow(arrow, region_one_dims, switch=-1)
-        diags_two = self._probe_around_arrow(arrow, regions_two_dims, switch=+1)
+        direction, direction_normal = self._compute_arrow_scan_params(arrow)
+        diags_one = self._perform_line_scan(arrow, region_one_dims, arrow.center, direction, direction_normal,
+                                            switch=-1)
+        diags_two = self._perform_line_scan(arrow, regions_two_dims, arrow.center, direction, direction_normal,
+                                            switch=+1)
+
+
+        # diags_one = self._probe_around_arrow(arrow, region_one_dims, switch=-1)
+        # diags_two = self._probe_around_arrow(arrow, regions_two_dims, switch=+1)
+        if diags_one and diags_two:
+            single_line = True
+        else: ### If no diags were found on one side of an arrow, assume, they can be
+            # found in the previous or next row of the reaction
+            # Check whether the arrow is at the beginning or end of a given line
+            closer_extreme = min([0, self.fig.img.shape[1]], key= lambda coord: (arrow.panel.center[0] - coord)**2)
+            search_direction = 'up-right' if closer_extreme == 0 else 'down-left'
+            diags_one = diags_one if diags_one else self._search_elsewhere(where=search_direction, arrow=arrow,
+                                                                           direction=direction, direction_normal=direction_normal,
+                                                                           switch=-1)
+            diags_two = diags_two if diags_two else self._search_elsewhere(where=search_direction, arrow=arrow,
+                                                                           direction=direction, direction_normal=direction_normal,
+                                                                           switch=+1)
+            single_line = False
+
         diags_react, diags_prod = self.assign_diags(diags_one, diags_two, arrow)
-        return ReactionStep(arrow, reactants=diags_react, products=diags_prod)
+        self.reaction_steps.append(ReactionStep(arrow, reactants=diags_react, products=diags_prod, single_line=single_line))
+
         # return diags_one, diags_two
 
 
@@ -518,12 +505,100 @@ class RoleProbe:
         groups = [group1, group2]
 
         def compute_ref_group_dist(group, pt):
-            group_centre = np.mean([member.center for member in group], axis=0)
-            return euclidean_distance(group_centre, pt)
+            """Compute distance between reference point and edge of the closest bouding box in a group"""
+            return min(bbox.edge_separation(ref_point) for bbox in group)
+
         prod_group = min(groups, key=lambda x: compute_ref_group_dist(x, ref_point))
         groups.remove(prod_group)
         react_group = groups[0]
         return react_group, prod_group
+
+    def resolve_nodes(self):
+        # """Looks for inconsistent diagram nodes and fixes them.
+        #
+        #  Diagram nodes are symmetric in that if diagrams take part in an intermediate step, all constructed nodes
+        #  associated with this group should contain the same number of diagrams. If something goes wrong, we choose a
+        #  minimal node to replace all the nodes associated with this diagram group. A minimal node is defined
+        #  as a list of diagrams of smallest length common to a group of nodes. For example, if three nodes contain diagrams
+        #  [A, B], [A,B] and [A, B, C], we choose [A, B] as the minimal node and replace the three nodes as [A,B] thus
+        #  fixing the third node"""
+        # nodes = [(node, step_idx) for (step_idx, step) in enumerate(self.reaction_steps) for node in (step.nodes[0], step.nodes[2])]
+        # getter = itemgetter(0)
+        # not_yet_grouped = set(list(range(len(nodes))))
+        # groups = []
+        # idx1 = 0
+        # while idx1 <= len(nodes) - 1:
+        #     if idx1 not in not_yet_grouped:
+        #         idx1 += 1
+        #         continue
+        #     group = [nodes[idx1]]
+        #     not_yet_grouped.remove(idx1)
+        #     for idx2 in range(len(nodes)):
+        #         node_intersection = set(getter(nodes[idx1])).intersection(set(getter(nodes[idx2])))
+        #         if idx2 in not_yet_grouped and node_intersection:
+        #             group.append(nodes[idx2])
+        #             not_yet_grouped.remove(idx2)
+        #     groups.append(group)
+        #     idx1 += 1
+        #
+        # for group in groups:
+        #     if len(group) > 2:
+        #         min_node = min(group, key=len)
+        #         min_node, idx = min_node
+        #         for node, step_idx in group:
+        #             step = self.reaction_steps[step_idx]
+        #             for step_node in step.nodes:
+        #                 if set(step_node).intersection(set(min_node)):
+        #                     step_node = min_node
+        # return groups
+
+        def compute_smallest_non_self_distance(panel1, panels):
+            """Computes smallest distance between panel1 and a panel inside panels, after potentially excluding
+            panel1 from panels"""
+            panels = copy.copy(panels)
+            if panel1 in panels:
+                panels.remove(panel1)
+
+            return min([panel1.edge_separation(p) for p in panels])
+
+        # for step in self.reaction_steps:
+        for diag in self.diagrams:
+            for step in diag.reaction_steps:
+                if not step.single_line: ## Do not use the criteria if step is spread across multiple lines
+                    continue
+
+                if diag in step.reactants:
+                    group = step.reactants
+                else:
+                    group = step.products
+                group_copy = group + [step.arrow]
+                min_dist = compute_smallest_non_self_distance(diag, group_copy)
+                if min_dist > SchemeConfig.MAX_GROUP_DISTANCE:
+                    group.remove(diag)
+                    diag.reaction_steps.remove(step)
+                    # TEST THIS - Is this working??????
+            # groups = [reaction_step.reactants if diag in reaction_step.reactants else reaction_step.products for
+            #           reaction_step in diag.reaction_steps]
+            # arrows = [step.arrow for step in diag.reaction_steps]
+            # groups = [list(g)+[a] for g,a in zip(groups, arrows)]
+            # min_dists = [compute_smallest_non_self_distance(diag, group ) for group in groups]
+            # # dists = [diag.panel.edge_separation(arrow) for arrow in arrows]
+            # print(min_dists)
+
+    def visualize_steps(self):
+        canvases = [step.visualize(self.fig) for step in self.reaction_steps]
+        _Y_SEPARATION = 50
+        out_canvas_height = np.sum([c.shape[0] for c in canvases]) + _Y_SEPARATION * (len(canvases) - 1)
+        out_canvas_width = np.max([c.shape[1] for c in canvases])
+        out_canvas = np.zeros([out_canvas_height, out_canvas_width])
+        y_end = 0
+        for canvas in canvases:
+            h, w = canvas.shape
+            out_canvas[y_end:y_end+h, 0:0+w] = canvas
+            y_end += h + _Y_SEPARATION
+
+        plt.imshow(out_canvas)
+        plt.show()
 
 
 
@@ -606,6 +681,52 @@ class RoleProbe:
         #
         # return diags_one, diags_two
 
+
+    def _search_elsewhere(self, where, arrow, direction, direction_normal, switch):
+        """
+        Looks for structures in a different line of a multi-line reaction scheme.
+
+        If a reaction scheme ends unexpectedly either on the left or right side of an arrows (no species found), then
+        a search is performed in the previous or next line of a reaction scheme respectively (assumes multiple lines
+        in a reaction scheme). Assumes left-to-right reaction scheme. Estimates the optimal alternative search point
+        using arrow and diagrams' coordinates in a DBSCAN search.
+        This gives clusters corresponding to the multiple lines in a reaction scheme. Performs a search in the new spot.
+        :param str where: Allows either 'down-left' to look below and to the left of arrow, or 'up-right' (above to the right)
+        :param Arrow arrow: Original arrow, around which the search failed
+        :param (float, lambda) distances: pair containing initial search distance and a distance function (usually same as
+        in the parent function)
+        :return: Collection of found species
+        :rtype: list[Diagram]
+        """
+        fig = self.fig
+        diags = self.diagrams
+
+        X = np.array([s.center[1] for s in diags] + [arrow.panel.center[1]]).reshape(-1, 1)  # the y-coordinate
+        eps = np.mean([s.height for s in diags])
+        dbscan = DBSCAN(eps=eps, min_samples=2)
+        y = dbscan.fit_predict(X)
+        num_labels = max(y) - min(y) + 1  # include outliers (label -1) if any
+        arrow_label = y[-1]
+        clustered = []
+        for val in range(-1, num_labels):
+            if val == arrow_label:
+                continue  # discard this cluster - want to compare the arrow with other clusters only
+            cluster = [centre for centre, label in zip(X, y) if label == val]
+            if cluster:
+                clustered.append(cluster)
+        centres = [np.mean(cluster) for cluster in clustered]
+        centres.sort()
+        if where == 'down-left':
+            move_to_vertical = [centre for centre in centres if centre > arrow.panel.center[1]][0]
+            move_to_horizontal = 0
+        elif where == 'up-right':
+            move_to_vertical = [centre for centre in centres if centre < arrow.panel.center[1]][-1]
+            move_to_horizontal = fig.img.shape[1]
+        startpoint = (move_to_horizontal, move_to_vertical)
+        species = self._perform_line_scan(arrow, self.fig.img.shape, startpoint, direction, direction_normal, switch)
+
+        return species
+
     def find_normal_to_arrow(self, arrow):
         (x, y), (MA, ma), angle = cv2.fitEllipse(arrow.contour)
         angle = angle - 90  # Angle should be anti-clockwise relative to +ve x-axis
@@ -654,6 +775,20 @@ class RoleProbe:
 
         return overlap
 
+    def _compute_arrow_scan_params(self, arrow):
+        (x, y), (MA, ma), angle = cv2.fitEllipse(arrow.contour)
+        angle = angle - 90  # Angle should be anti-clockwise relative to +ve x-axis
+        normal_angle = angle + 90
+        # center = np.asarray([x, y])
+        direction = np.asarray([1, np.tan(np.radians(angle))])
+        if abs(np.around(angle, -1)) == 90 or abs(np.around(angle, -1)) == 270: ## Manually fix around tan discontinuities
+            direction = np.asarray([0, 1])
+        direction = direction / np.linalg.norm(direction)
+        direction_normal = np.asarray([1, np.tan(np.radians(normal_angle))])
+        direction_normal = direction_normal / np.linalg.norm(direction_normal)
+
+        return direction, direction_normal
+
     def _probe_around_arrow(self, arrow , region_dims, switch):
         """Finds diagrams around an arrow within a region.
 
@@ -664,32 +799,79 @@ class RoleProbe:
         value of -1 or +1 to compute required differences in position from the arrow centre.
         #TODO: Document this fully
         """
-        assert switch in [-1, 1]
-        # center = arrow.center
-        region_x_length, region_y_length = region_dims
 
+        # center = arrow.center
+
+        # region_x_length -= arrow.panel.width // 2
+        # region_y_length -= arrow.panel.height // 2
         (x, y), (MA, ma), angle = cv2.fitEllipse(arrow.contour)
         angle = angle - 90  # Angle should be anti-clockwise relative to +ve x-axis
         normal_angle = angle + 90
         center = np.asarray([x, y])
         direction = np.asarray([1, np.tan(np.radians(angle))])
+        if abs(np.around(angle, -1)) == 90 or abs(np.around(angle, -1)) == 270: ## Manually fix around tan discontinuities
+            direction = np.asarray([0, 1])
         direction = direction / np.linalg.norm(direction)
         direction_normal = np.asarray([1, np.tan(np.radians(normal_angle))])
+        direction_normal = direction_normal / np.linalg.norm(direction_normal)
+        return self._perform_line_scan(arrow, region_dims, center, direction, direction_normal, switch)
+        # stepsize_x = self.stepsize * direction[0]
+        # stepsize_y = self.stepsize * direction[1]
+        # num_centers_x = abs(region_x_length // stepsize_x)
+        # num_centers_y = abs(region_y_length // stepsize_y)
+        # num_centers = int(min(num_centers_x, num_centers_y))
+        # deltas = np.array([[stepsize_x * n, stepsize_y * n] for n in range(1, num_centers + 1)])
+        # deltas = deltas * switch
+        # centers = center + deltas
+        # lines = [Line(find_points_on_line(center, direction_normal, distance=self.segment_length/2))
+        #              for center in centers]
 
+        ## Visualize lines ##
+        # import matplotlib.pyplot as plt
+        # plt.imshow(self.fig.img)
+        # for line in lines:
+        #     (x1, y1), (x2, y2) = line.endpoints
+        #     plt.plot([x1, x2], [y1, y2], c='r')
+        # plt.show()
+        #
+        # try:
+        #     other_arrows = copy.copy(self.arrows)
+        #     other_arrows.remove(arrow)
+        #     arrow_overlap = [any(self._check_overlap(l, a.panel) for a in other_arrows) for l in lines].index(True)
+        # except ValueError:
+        #     arrow_overlap = None
+        #
+        # if arrow_overlap is not None:
+        #     lines = lines[:arrow_overlap]
+        # diags = []
+        #
+        # for l in lines:
+        #     for d in self.diagrams:
+        #         if self.sufficient_overlap(l, d.panel):
+        #             diags.append(d)
+        # diags = list(set(diags))
+        #
+        # return diags
+
+
+    def _perform_line_scan(self, arrow, region_dims, start_point, direction, direction_normal, switch):
+        # assert switch in [-1, 1]
+        region_x_length, region_y_length = region_dims
         stepsize_x = self.stepsize * direction[0]
         stepsize_y = self.stepsize * direction[1]
         num_centers_x = abs(region_x_length // stepsize_x)
         num_centers_y = abs(region_y_length // stepsize_y)
         num_centers = int(min(num_centers_x, num_centers_y))
-        deltas = switch * np.array([[stepsize_x * n, stepsize_y * n] for n in range(1, num_centers + 1)])
-        centers = center + deltas
+        deltas = np.array([[stepsize_x * n, stepsize_y * n] for n in range(1, num_centers + 1)])
+        deltas = deltas * switch
+        centers = start_point + deltas
         lines = [Line(find_points_on_line(center, direction_normal, distance=self.segment_length))
                      for center in centers]
 
         ## Visualize lines ##
         # import matplotlib.pyplot as plt
         # plt.imshow(self.fig.img)
-        # for line in lines_one:
+        # for line in lines:
         #     (x1, y1), (x2, y2) = line.endpoints
         #     plt.plot([x1, x2], [y1, y2], c='r')
         # plt.show()
@@ -701,9 +883,11 @@ class RoleProbe:
         except ValueError:
             arrow_overlap = None
 
-        if arrow_overlap is not None:
+        if arrow_overlap is not None and arrow_overlap > 2: ### Remove further lines, unless two arrows are
+            # neighbouring one another
             lines = lines[:arrow_overlap]
         diags = []
+
         for l in lines:
             for d in self.diagrams:
                 if self.sufficient_overlap(l, d.panel):

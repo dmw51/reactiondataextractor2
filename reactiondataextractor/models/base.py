@@ -46,3 +46,14 @@ class Candidate:
     def pass_attributes(self):
         """Returns all attributes in the form of a dictionary"""
         return vars(self)
+
+
+class TextRegion:
+    """A class for text region objects such as labels and conditions, which ought to be assigned to their respective
+    parent region - diagrams and arrows respectively"""
+
+    def set_nearest_as_parent(self, panels):
+        """Sets parent panel as the nearest of all `panels`"""
+        parent = min(panels, key=self.panel.edge_separation)
+        parent.children.append(self)
+        # self.parent_panel = None # Ensure no cyclic reference

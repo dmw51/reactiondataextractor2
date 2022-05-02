@@ -52,6 +52,7 @@ class OCRConfig(Config):
 class SchemeConfig(Config):
     SEARCH_DISTANCE_FACTOR = 0.9
     MIN_PROBING_OVERLAP_FACTOR = 0.5
+    MAX_GROUP_DISTANCE = 50 # TODO: Adjust this value (maybe make a coefficient out of this)
 
 class SegmentsConfig(Config):
     CROP_THRESH_INTER_AREA = 0.95  # What fraction of a connected component needs to be within a crop to belong to it

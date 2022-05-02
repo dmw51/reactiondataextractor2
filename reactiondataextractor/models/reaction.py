@@ -17,6 +17,11 @@ from __future__ import unicode_literals
 
 import logging
 
+import numpy as np
+from matplotlib import pyplot as plt
+
+from config import Config
+from .base import TextRegion
 from .segments import Panel, PanelMethodsMixin
 from reactiondataextractor.utils import PrettyFrozenSet
 
@@ -52,11 +57,14 @@ class Diagram(BaseReactionClass, PanelMethodsMixin):
         self._label = label
         self._smiles = smiles
         self._crop = crop
+        self.children = []
+        self.reaction_steps = []
         super().__init__()
 
     def __eq__(self, other):
         if isinstance(other, Diagram):  # Only compare exact same types
-            return self.panel == other.panel and self.label == other.label
+            return self.panel == other.panel
+        return False
 
     def __hash__(self):
         return hash(self.panel)
@@ -66,6 +74,10 @@ class Diagram(BaseReactionClass, PanelMethodsMixin):
 
     def __str__(self):
         return f'{self.smiles if self.smiles else "???"}, label: {self.label}'
+
+    @property
+    def labels(self):
+        return self.children
 
     @property
     def panel(self):
@@ -134,10 +146,18 @@ class ReactionStep(BaseReactionClass):
 
     """
 
-    def __init__(self, arrow, reactants, products):
+    @property
+    def conditions(self):
+        return self.arrow.conditions
+
+    def __init__(self, arrow, reactants, products, single_line=True):
         self.arrow = arrow
-        self.reactants = PrettyFrozenSet(reactants)
-        self.products = PrettyFrozenSet(products)
+        self.reactants = reactants
+        self.products = products
+        self._diags = reactants + products
+        self.single_line = single_line
+        for diag in self._diags:
+            diag.reaction_steps.append(self)
 
     def __eq__(self, other):
         if isinstance(other, ReactionStep):
@@ -160,6 +180,47 @@ class ReactionStep(BaseReactionClass):
 
     def __iter__(self):
         return iter((self.reactants, self.products))
+
+    @property
+    def nodes(self):
+        return [self.reactants, self.conditions, self.products]
+
+    def visualize(self, fig):
+        _X_SEPARATION = 50
+        elements = self.reactants + self.products + [self.arrow]
+        orig_coords = [e.panel.in_original_fig() for e in elements]
+
+        canvas_width = np.sum([c[3] - c[1] for c in orig_coords]) + _X_SEPARATION * (len(elements) - 1)
+        canvas_height = max([c[2] - c[0] for c in orig_coords])
+
+        canvas = np.zeros([canvas_height, canvas_width])
+        x_end = 0
+        for diag in self.reactants:
+            self._place_panel_on_canvas(diag.panel, canvas,fig,  (x_end, 0))
+            orig_coords = diag.panel.in_original_fig()
+            x_end += orig_coords[3] - orig_coords[1] + _X_SEPARATION
+        self._place_panel_on_canvas(self.arrow.panel, canvas, fig, (x_end, int(canvas_height//2)))
+        orig_coords = self.arrow.panel.in_original_fig()
+        x_end += orig_coords[3] - orig_coords[1] + _X_SEPARATION
+        for diag in self.products:
+            self._place_panel_on_canvas(diag.panel, canvas, fig, (x_end, 0))
+            orig_coords = diag.panel.in_original_fig()
+            x_end += orig_coords[3] - orig_coords[1] + _X_SEPARATION
+
+        return canvas
+
+    def _place_panel_on_canvas(self, panel, canvas,fig,  left_top):
+
+        ## Specify coords of the paste region
+        x, y = left_top
+        w, h = panel.width, panel.height
+
+        ## Specify coords of the crop region
+        top, left, bottom, right = panel
+
+        canvas[y:y+h, x:x+w] = fig.img[top:bottom, left:right]
+
+        # return canvas
 
 
 class Conditions:
@@ -190,7 +251,7 @@ class Conditions:
         # self.text_lines.sort(key=lambda textline: textline.panel.top)
 
     def __repr__(self):
-        return f'Conditions({self.text_lines}, {self.conditions_dct}, {self.arrow})'
+        return f'Conditions({self.panel}, {self.conditions_dct}, {self.arrow})'
 
     def __str__(self):
         delimiter = '\n------\n'
@@ -205,7 +266,7 @@ class Conditions:
             return False
 
     def __hash__(self):
-        return hash(sum(hash(line) for line in self.text_lines))
+        return hash(self.panel)
 
     # @property
     # def anchor(self):
@@ -241,7 +302,7 @@ class Conditions:
         return self.conditions_dct['yield']
 
 
-class Label(PanelMethodsMixin):
+class Label(TextRegion, PanelMethodsMixin):
     """Describes labels and recgonised text
 
     :param panel: bounding box a label
@@ -256,7 +317,7 @@ class Label(PanelMethodsMixin):
         panel = Panel(left, right, top, bottom)
         return cls(panel, text)
 
-    def __init__(self, panel, text=None, r_group=None, *, parent_panel=None, _prior_class=None):
+    def __init__(self, panel, text=None, r_group=None, *, _prior_class=None):
         if r_group is None:
             r_group = []
         if text is None:
@@ -265,11 +326,11 @@ class Label(PanelMethodsMixin):
         self._text = text
         self.r_group = r_group
         self._prior_class = _prior_class
-        self._parent_panel = parent_panel
+        # self._parent_panel = parent_panel
 
-    @property
-    def diagram(self):
-        return self._parent_panel
+    # @property
+    # def diagram(self):
+    #     return self._parent_panel
 
     @property
     def text(self):

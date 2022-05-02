@@ -8,7 +8,7 @@ import numpy as np
 import cv2
 from scipy.stats import mode
 
-from .config import ProcessorConfig
+from .config import ProcessorConfig, Config
 from .models.segments import Rect, Figure
 from . import config
 
@@ -109,14 +109,18 @@ class ImageReader(Processor):
 class ImageScaler(Processor):
 
     def __init__(self, fig, resize_min_dim_to, enabled=True):
-
+    # def __init__(self, fig, resize_max_dim_to, enabled=True):
         self.resize_min_dim_to = resize_min_dim_to
+        # self.resize_max_dim_to = resize_max_dim_to
         super().__init__(fig=fig, enabled=enabled)
 
     def process(self):
         min_dim = min(self.fig.img.shape)
         y_dim, x_dim = self.fig.img.shape
         scaling_factor = self.resize_min_dim_to/min_dim
+        # max_dim = max(self.fig.img.shape[:2])
+        # y_dim, x_dim = self.fig.img.shape
+        # scaling_factor = self.resize_max_dim_to / max_dim
         img = cv2.resize(self.fig.img, (int(x_dim*scaling_factor), int(y_dim*scaling_factor)))
         self.fig._scaling_factor = scaling_factor
         self.fig.img = img
