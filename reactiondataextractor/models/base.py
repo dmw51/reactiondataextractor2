@@ -16,7 +16,11 @@ class BaseExtractor:
 
     @abstractmethod
     def __init__(self, fig):
-        self.fig = fig
+        self._fig = fig
+
+    @property
+    def fig(self):
+        return self._fig
 
     @abstractmethod
     def extract(self):

@@ -18,7 +18,6 @@ email: m.swain@me.com
 from __future__ import absolute_import
 from __future__ import division
 
-import copy
 from collections import Sequence
 from collections.abc import Collection
 from enum import Enum
@@ -31,13 +30,12 @@ from matplotlib.patches import Rectangle
 
 
 import numpy as np
-import scipy.ndimage as ndi
 # from skimage.measure import regionprops
 # from skimage.util import pad
-
+from reactiondataextractor.configs import figure
 from .geometry import Line, Point
 # from .. import settings
-from reactiondataextractor.config import ProcessorConfig, SegmentsConfig
+from configs.config import ProcessorConfig, SegmentsConfig
 
 log = logging.getLogger('extract.segments')
 
@@ -169,7 +167,7 @@ class Rect(object):
         megabox = cls((top, left, bottom, right))
         return megabox
 
-    def __init__(self, coords):
+    def  __init__(self, coords):
         """
         :param (int, int, int, int): (top, left, bottom, right) coordinates of top-left and bottom-right rectangle points
         """
@@ -455,7 +453,7 @@ class Rect(object):
         return iou
 
 
-class Panel(Rect):
+class Panel(Rect, figure.GlobalFigureMixin):
 
     @classmethod
     def create_megapanel(cls, boxes, fig):
@@ -482,12 +480,13 @@ class Panel(Rect):
     :type tag: int
     """
     def __init__(self, coords, fig=None, tag=None):
-        super(Panel, self).__init__(coords)
+        Rect.__init__(self, coords)
+        figure.GlobalFigureMixin.__init__(self, fig)
         self.tag = tag
         # if fig is None:
         #     self.fig = settings.main_figure[0]
         # else:
-        self.fig = fig
+        # self.fig = fig
 
         self.role = None
         self.parent_panel = None
@@ -528,7 +527,7 @@ class Panel(Rect):
         returns `self.coords`"""
 
         assert self.fig is not None, "Cannot convert coordinates to original values - this panel has not been associated" \
-                                     "with any figure"
+                                     " with any figure"
         if self.fig._scaling_factor:
             # t, l, b, r = self
             return list(map(lambda x: int(x / self.fig._scaling_factor), self.coords))

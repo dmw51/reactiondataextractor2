@@ -18,12 +18,9 @@ from __future__ import unicode_literals
 import logging
 
 import numpy as np
-from matplotlib import pyplot as plt
 
-from config import Config
 from .base import TextRegion
 from .segments import Panel, PanelMethodsMixin
-from reactiondataextractor.utils import PrettyFrozenSet
 
 log = logging.getLogger('extract.reaction')
 

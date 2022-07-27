@@ -528,7 +528,8 @@ def find_relative_directional_position(point1, point2):
 
     v = point2[0] - point1[0], point2[1] - point1[1]
     j = (0, 1)  # (x, y) expected
-    l_v = np.sqrt((v[0]**2 + v[1]**2))
+    epsilon = 1e-5
+    l_v = max(np.sqrt((v[0]**2 + v[1]**2)), epsilon)  # Avoid division by zero
     theta = np.arccos(np.dot(v, j)/(l_v * 1))
     theta = theta * 180 / np.pi
     return theta

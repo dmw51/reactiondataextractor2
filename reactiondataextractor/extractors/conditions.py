@@ -29,7 +29,7 @@ import re
 # from ..ocr import read_conditions
 # from ..utils.processing import find_minima_between_peaks, erase_elements
 # from .. import settings
-from reactiondataextractor.config import ExtractorConfig
+from configs.config import ExtractorConfig
 from reactiondataextractor.models.base import BaseExtractor, TextRegion
 from reactiondataextractor.models.segments import FigureRoleEnum
 from reactiondataextractor.ocr import img_to_text, CONDITIONS_WHITELIST

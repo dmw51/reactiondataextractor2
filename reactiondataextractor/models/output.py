@@ -12,28 +12,20 @@ email: dmw51@cam.ac.uk
 import copy
 from abc import ABC, abstractmethod
 from collections import Counter
-from operator import itemgetter
 
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.patches import Rectangle
 import json
 
 from sklearn.cluster import DBSCAN
 
-from .geometry import Line, Point
-from .reaction import Diagram, ReactionStep
-from .segments import ReactionRoleEnum
-# from .utils import Point, PrettyFrozenSet, PrettyList
-from ..actions import find_nearby_ccs #extend_line
-from .reaction import Conditions
-# from .. import settings
+from reactiondataextractor.models.geometry import Line
+from reactiondataextractor.models.reaction import Diagram, ReactionStep
+from reactiondataextractor.models.segments import ReactionRoleEnum
 
-import matplotlib
-
-from ..config import SchemeConfig
-from ..utils import PrettyFrozenSet, find_points_on_line, euclidean_distance
+from configs.config import SchemeConfig
+from reactiondataextractor.utils import find_points_on_line, euclidean_distance
 
 
 class Graph(ABC):
@@ -267,35 +259,55 @@ class ReactionScheme(Graph):
                 return self.find_path(prod, group2, path=path)
         return None
 
+    # def to_json(self):
+    #     # reactions = [self._json_generic_recursive(start_node) for start_node in self._start]
+    #     json_dict = {}
+    #
+    #     nodes = {label: node for label, node in zip(map(str, range(50)), self.nodes)}
+    #     json_dict['node_labels'] = nodes
+    #     adjacency = {}
+    #     for node1, out_nodes in self.graph.items():
+    #         node1_label = [label for label, node in nodes.items() if node == node1][0]
+    #         out_nodes_labels = [label for label, node in nodes.items() if node in out_nodes]
+    #
+    #         adjacency[node1_label] = out_nodes_labels
+    #     json_dict['adjacency'] = adjacency
+    #
+    #     for label, node in json_dict['node_labels'].items():
+    #         if hasattr(node, '__iter__'):
+    #             contents = []
+    #             for diagram in node:
+    #                 if diagram.label:
+    #                     content = {'smiles': diagram.smiles, 'label': [sent.text.strip() for sent in diagram.label.text ]}
+    #                 else:
+    #                     content = {'smiles': diagram.smiles, 'label': None}
+    #                 contents.append(content)
+    #             json_dict['node_labels'][label] = contents
+    #         elif isinstance(node, Conditions):
+    #             contents = node.conditions_dct
+    #             json_dict['node_labels'][label] = contents
+    #
+    #     return json.dumps(json_dict, indent=4)
+
     def to_json(self):
-        # reactions = [self._json_generic_recursive(start_node) for start_node in self._start]
-        json_dict = {}
+        adjacency = self.adjacency
+        nodes = []
+        for node, value in self.nodes.items():
+            node_dcts = []
+            for element in node:
+                if isinstance(element, Diagram):  # Either a Diagram or Conditions
+                    diag_dct = {'smiles': element.smiles, 'panel': element.panel.in_original_fig(),
+                                'label': [label.text for label in element.labels]}
+                    node_dcts.append(diag_dct)
+                else:
+                    node_dcts.append(element.conditions_dct)
+            nodes.append(node_dcts)
+        json_dct = {'adjacency': adjacency,
+                    'nodes': nodes}
 
-        nodes = {label: node for label, node in zip(map(str, range(50)), self.nodes)}
-        json_dict['node_labels'] = nodes
-        adjacency = {}
-        for node1, out_nodes in self.graph.items():
-            node1_label = [label for label, node in nodes.items() if node == node1][0]
-            out_nodes_labels = [label for label, node in nodes.items() if node in out_nodes]
-            
-            adjacency[node1_label] = out_nodes_labels
-        json_dict['adjacency'] = adjacency
+        return json.dumps(json_dct, indent=4)
 
-        for label, node in json_dict['node_labels'].items():
-            if hasattr(node, '__iter__'):
-                contents = []
-                for diagram in node:
-                    if diagram.label:
-                        content = {'smiles': diagram.smiles, 'label': [sent.text.strip() for sent in diagram.label.text ]}
-                    else:
-                        content = {'smiles': diagram.smiles, 'label': None}
-                    contents.append(content)
-                json_dict['node_labels'][label] = contents
-            elif isinstance(node, Conditions):
-                contents = node.conditions_dct
-                json_dict['node_labels'][label] = contents
 
-        return json.dumps(json_dict, indent=4)
 
     # def _json_generic_recursive(self, start_key, json_obj=None):
     #     """

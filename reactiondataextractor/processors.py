@@ -8,18 +8,13 @@ import numpy as np
 import cv2
 from scipy.stats import mode
 
-from .config import ProcessorConfig, Config
-from .models.segments import Rect, Figure
-from . import config
+from configs.figure import GlobalFigureMixin
+from reactiondataextractor.models.segments import Rect, Figure
+from reactiondataextractor.configs import config
 
-class GlobalFigureMixin:
-    """If no `figure` was passed to an initializer, use the figure stored in config
-    (set at the beginning of extraction)"""
-    def __init__(self, fig):
-        if fig is None:
-            self.fig = config.Config.FIGURE
 
 class Processor(ABC, GlobalFigureMixin):
+
 
     class COLOR_MODE(Enum):
         GRAY = auto()
@@ -33,6 +28,7 @@ class Processor(ABC, GlobalFigureMixin):
 
     @abstractmethod
     def process(self):
+        """The main processing method"""
         pass
 
     @property
@@ -52,7 +48,8 @@ class ImageReader(Processor):
         super().__init__(enabled=True)
 
     def process(self):
-
+        """Reads an image into an np.ndarray from .png, .jpg/.jpeg etc formats, as well as .gif format (used by some
+        journals)"""
         if self.color_mode == self.COLOR_MODE.GRAY:
             img = cv2.imread(self.filepath, cv2.IMREAD_GRAYSCALE)
             img_detectron = cv2.imread(self.filepath)
@@ -71,7 +68,6 @@ class ImageReader(Processor):
             # img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         img = self.adjust_bg_value(img)
         img_detectron = self.adjust_bg_value(img_detectron, desired=255)
-         # TODO: Investigate the bg conversion - make sure detectron image has the same bg value as the training data (is it 1/255? and not 0?)
         self.fig = Figure(img=img, raw_img=img, img_detectron=img_detectron)  # Important that all used imgs have bg value 0 hence raw_img==img
         return self.fig
 
@@ -96,6 +92,11 @@ class ImageReader(Processor):
         return img, img_detectron
 
     def adjust_bg_value(self, img, desired=0):
+        """Flips the image if the background colour does not match the desired background colour
+        :param img: image to be processed
+        :type img: np.ndarray
+        :param desired: the expected value associated with background (0 or 255)
+        :type desired: int"""
         bg_value = mode(img.ravel())[0][0]
 
         if desired == 0:
@@ -106,15 +107,18 @@ class ImageReader(Processor):
                 img = np.invert(img)
         return img
 
+
 class ImageScaler(Processor):
+    """Processor used for scaling an image"""
 
     def __init__(self, fig, resize_min_dim_to, enabled=True):
-    # def __init__(self, fig, resize_max_dim_to, enabled=True):
+
         self.resize_min_dim_to = resize_min_dim_to
         # self.resize_max_dim_to = resize_max_dim_to
         super().__init__(fig=fig, enabled=enabled)
 
     def process(self):
+        """Scales an image so that the smaller dimension has the desired length (specified inside __init__)"""
         min_dim = min(self.fig.img.shape)
         y_dim, x_dim = self.fig.img.shape
         scaling_factor = self.resize_min_dim_to/min_dim
@@ -127,65 +131,68 @@ class ImageScaler(Processor):
         return self.fig
 
 class ImageNormaliser(Processor):
+    """Processor used to normalise an image to a range between 0 and 1"""
     def __init__(self, fig, enabled=True):
         super().__init__(fig=fig, enabled=enabled)
 
     def process(self):
+        """Normalises an image to range [0, 1]"""
         img = self.fig.img
         img = ((img - img.min()) / (img.max() - img.min()) * 255).astype(np.uint8)
         self.fig.img = img
         return self.fig
 
-class TextLineRemover(Processor):
-    WIDTH_THRESH_FACTOR = 0.3
+# class TextLineRemover(Processor):
+#     WIDTH_THRESH_FACTOR = 0.3
+#
+#     def __init__(self, img, enabled=True):
+#         self.selem = np.concatenate((np.zeros((2, 6)), np.ones((2, 6)), np.zeros((2, 6))), axis=0).astype(np.uint8)
+#
+#         self.top_roi = Rect(0, 0, self.img.shape[0] // 5, self.img.shape[1] // 5)
+#         self.bottom_roi = Rect(int(self.img.shape[0] * 4 / 5), 0,
+#                                self.img.shape[0], int(self.img.shape[1] // 5))
+#
+#         super().__init__(enabled=enabled)
+#
+#     def process(self):
+#         if not self._enabled:
+#             return self.img
+#         img = cv2.cvtColor(self.img, cv2.COLOR_BGR2GRAY)
+#         img = 255 - img
+#         img = cv2.dilate(img, self.selem, iterations=6)
+#         ret, img = cv2.threshold(img, 40, 255, cv2.THRESH_BINARY)
+#         contours, hierarchy = cv2.findContours(img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+#         print(len(contours))
+#         crop_top = []
+#         crop_bottom = []
+#
+#         for cnt in contours:
+#             x, y, w, h = cv2.boundingRect(cnt)
+#             print(cv2.boundingRect(cnt))
+#             #             print(self.bottom_roi)
+#             if w > self.WIDTH_THRESH_FACTOR * self.img.shape[1]:
+#                 print('width okay')
+#
+#                 #                 print(f'{x}, {y}')
+#                 if self.top_roi.contains_point((x, y)):
+#                     crop_top.append((x, y, x + w, y + h))
+#                 elif self.bottom_roi.contains_point((x, y)):
+#                     crop_bottom.append((x, y, x + w, y + h))
+#
+#         # Crop the whole images down to the first bottom text line
+#         print(f'crop_bottom: {crop_bottom}')
+#         if crop_bottom:
+#             crop_bottom_boundary = min([coords[1] for coords in crop_bottom])
+#             print(crop_bottom_boundary)
+#             self._img = self._img[:crop_bottom_boundary, :]
+#         if crop_top:
+#             crop_top_boundary = max([coords[1] for coords in crop_top])
+#             self._img = self._img[crop_top_boundary:, :]
+#         return self._img
 
-    def __init__(self, img, enabled=True):
-        self.selem = np.concatenate((np.zeros((2, 6)), np.ones((2, 6)), np.zeros((2, 6))), axis=0).astype(np.uint8)
 
-        self.top_roi = Rect(0, 0, self.img.shape[0] // 5, self.img.shape[1] // 5)
-        self.bottom_roi = Rect(int(self.img.shape[0] * 4 / 5), 0,
-                               self.img.shape[0], int(self.img.shape[1] // 5))
-
-        super().__init__(enabled=enabled)
-
-    def process(self):
-        if not self._enabled:
-            return self.img
-        img = cv2.cvtColor(self.img, cv2.COLOR_BGR2GRAY)
-        img = 255 - img
-        img = cv2.dilate(img, self.selem, iterations=6)
-        ret, img = cv2.threshold(img, 40, 255, cv2.THRESH_BINARY)
-        contours, hierarchy = cv2.findContours(img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        print(len(contours))
-        crop_top = []
-        crop_bottom = []
-
-        for cnt in contours:
-            x, y, w, h = cv2.boundingRect(cnt)
-            print(cv2.boundingRect(cnt))
-            #             print(self.bottom_roi)
-            if w > self.WIDTH_THRESH_FACTOR * self.img.shape[1]:
-                print('width okay')
-
-                #                 print(f'{x}, {y}')
-                if self.top_roi.contains_point((x, y)):
-                    crop_top.append((x, y, x + w, y + h))
-                elif self.bottom_roi.contains_point((x, y)):
-                    crop_bottom.append((x, y, x + w, y + h))
-
-        # Crop the whole images down to the first bottom text line
-        print(f'crop_bottom: {crop_bottom}')
-        if crop_bottom:
-            crop_bottom_boundary = min([coords[1] for coords in crop_bottom])
-            print(crop_bottom_boundary)
-            self._img = self._img[:crop_bottom_boundary, :]
-        if crop_top:
-            crop_top_boundary = max([coords[1] for coords in crop_top])
-            self._img = self._img[crop_top_boundary:, :]
-        return self._img
-
-
-class EdgeExtractor(Processor):
+class Binariser(Processor):
+    """Processor used for binarisation"""
 
     def __init__(self, fig, bin_thresh=None):
         super().__init__(enabled=True, fig=fig)
@@ -195,28 +202,17 @@ class EdgeExtractor(Processor):
             self.color_mode = self.COLOR_MODE.RGB
         self.bin_thresh = bin_thresh if bin_thresh else config.ProcessorConfig.BIN_THRESH
 
-
-
     def process(self):
+        """Binarises gray images"""
         if self.color_mode == self.COLOR_MODE.GRAY:
-
-            #TODO: Make sure the background is consistent - this makes contour search reliable
-            ## bg should be 0
-
             ret, img = cv2.threshold(self.img, *self.bin_thresh, cv2.THRESH_BINARY)
-            fig_copy = deepcopy(self.fig)
-            fig_copy.img = img
-            return fig_copy
-        elif self.color_mode == self.COLOR_MODE.RGB:
-
-            img = cv2.GaussianBlur(self.img, (3, 3), 1)
             fig_copy = deepcopy(self.fig)
             fig_copy.img = img
             return fig_copy
 
 
 class Isolator(Processor):
-
+    """Processor class used for isolating individual connected components"""
     def __init__(self, fig, to_isolate, isolate_mask):
         super().__init__(fig=fig)
         self.to_isolate = to_isolate
@@ -250,11 +246,8 @@ class Isolator(Processor):
         return fig_copy
 
     def process(self):
+        """Isolates connected components either by using their panels or pixel-wise masks"""
         if self.isolate_mask:
             return self._isolate_mask()
         else:
             return self._isolate_panel()
-
-
-
-

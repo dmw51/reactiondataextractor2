@@ -23,14 +23,14 @@ from detectron2 import model_zoo
 
 
 from reactiondataextractor.models.base import BaseExtractor, Candidate
-from .conditions import ConditionsExtractor
+from reactiondataextractor.extractors.conditions import ConditionsExtractor
 # from .labels import LabelExtractor
-from .labels import LabelExtractor
-from ..config import ExtractorConfig
+from reactiondataextractor.extractors.labels import LabelExtractor
+from configs.config import ExtractorConfig
 # from ..models.ml_models.unified_detection import RDEModel, RSchemeConfig
-from ..models.reaction import Diagram, Conditions, Label
-from ..models.segments import Panel, Rect, FigureRoleEnum, Crop, PanelMethodsMixin
-from ..utils import skeletonize_area_ratio, dilate_fig, erase_elements, find_relative_directional_position, \
+from reactiondataextractor.models.reaction import Diagram, Conditions, Label
+from reactiondataextractor.models.segments import Panel, Rect, FigureRoleEnum, Crop, PanelMethodsMixin
+from reactiondataextractor.utils import skeletonize_area_ratio, dilate_fig, erase_elements, find_relative_directional_position, \
     compute_ioa, lies_along_arrow_normal
 
 parent_dir = os.path.dirname(os.path.abspath(__file__))
@@ -47,10 +47,11 @@ class UnifiedExtractor(BaseExtractor):
 
         # DetectionCheckpointer(self.model).load(ExtractorConfig.UNIFIED_EXTR_MODEL_WT_PATH)
         # self.model.eval()
-        self.all_arrows = all_arrows
+        self._all_arrows = all_arrows
         self.diagram_extractor = DiagramExtractor(self.fig,diag_priors=None, arrows=self.all_arrows)
         self.label_extractor = LabelExtractor(self.fig, priors=None)
         self.conditions_extractor = ConditionsExtractor(self.fig, priors=None)
+
 
 
         # self._class_dict = {
@@ -66,6 +67,27 @@ class UnifiedExtractor(BaseExtractor):
             2: Label
 
         }
+
+    @property
+    def all_arrows(self):
+        return self._all_arrows
+
+    @all_arrows.setter
+    def all_arrows(self, val):
+        self._all_arrows = val
+        self.diagram_extractor._arrows = val
+
+    @property
+    def fig(self):
+        return self._fig
+
+    @fig.setter
+    def fig(self, val):
+        self._fig = val
+        self.model.fig = val
+        self.diagram_extractor._fig = val
+        self.label_extractor._fig = val
+        self.conditions_extractor._fig = val
 
     def extract(self):
         boxes, classes, scores = self.model.detect()
@@ -301,7 +323,7 @@ class UnifiedExtractor(BaseExtractor):
         class_ =  self._class_dict[obj._prior_class]
         seps = {k: obj.edge_separation(v) for k, v in closest.items()}
         thresh_reclassification_dist = ExtractorConfig.UNIFIED_RECLASSIFY_DIST_THRESH_COEFF * np.sqrt(obj.area)
-        if seps['arrow'] < seps['diag'] and seps['arrow'] < thresh_reclassification_dist:
+        if seps['arrow'] <= seps['diag'] and seps['arrow'] < thresh_reclassification_dist:
             # ### Form 4 points, 2 at end of arrows (or extending a bit further), 2 extending from a line normal to the
             # ### arrow's bounding ellipse, and check which is closest. Reclassify as conditions if obj is closer to
             # ### a normal point
@@ -520,8 +542,10 @@ class DiagramExtractor(BaseExtractor):
                 dilated_temp = dilate_fig(erase_elements(fig, [a.panel for a in self._arrows]),
                                           num_iterations)
                 dilated_figs[num_iterations] = dilated_temp
-
-            dilated_structure_panel = [cc for cc in dilated_temp.connected_components if cc.contains(diag)][0]
+            try:
+                dilated_structure_panel = [cc for cc in dilated_temp.connected_components if cc.contains(diag)][0]
+            except IndexError: ## Not found
+                continue
             # Crop around with a small extension to get the connected component correctly
             structure_crop = dilated_structure_panel.create_extended_crop(dilated_temp, extension=5)
             other = [structure_crop.in_main_fig(c) for c in structure_crop.connected_components if
@@ -582,7 +606,6 @@ class DiagramExtractor(BaseExtractor):
                 structure_panels.append(parent_structure_panel)
         return structure_panels
 
-
     def _find_optimal_dilation_extent(self):
             """
             Use structural prior to calculate local skeletonised-pixel ratio and find optimal dilation kernel extent
@@ -598,8 +621,8 @@ class DiagramExtractor(BaseExtractor):
             for prior in self.diag_priors:
                 top, left, bottom, right = prior
                 horz_ext, vert_ext = prior.width // 2, prior.height // 2
-                horz_ext = max(horz_ext, ExtractorConfig.DIAG_MIN_EXT)
-                vert_ext = max(vert_ext, ExtractorConfig.DIAG_MIN_EXT)
+                horz_ext = max(horz_ext, ExtractorConfig.DIAG_DILATION_EXT)
+                vert_ext = max(vert_ext, ExtractorConfig.DIAG_DILATION_EXT)
 
                 crop_rect = Rect((top - vert_ext,left - horz_ext, bottom + vert_ext, right + horz_ext ))
                 p_ratio = skeletonize_area_ratio(self.fig, crop_rect)
@@ -632,7 +655,7 @@ class TextRegionCandidate(Candidate, PanelMethodsMixin):
 class Detectron2Adapter:
     """Performs necessary preprocessing steps, runs predictions using detectron2, and applies postprocessing"""
 
-    ###detectron2 config ###
+    ###detectron2 configs ###
     cfg = get_cfg()
     cfg.merge_from_file(model_zoo.get_config_file("COCO-Detection/faster_rcnn_X_101_32x8d_FPN_3x.yaml"))
     cfg.MODEL.DEVICE = 'cpu'

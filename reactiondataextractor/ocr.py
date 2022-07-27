@@ -23,27 +23,17 @@ import locale
 import PIL.Image
 import cv2
 
-from reactiondataextractor.config import OCRConfig
+from configs.config import OCRConfig
 from reactiondataextractor.models.segments import Rect
 
 locale.setlocale(locale.LC_ALL, 'C')
 import collections
 import enum
 import logging
-import warnings
 
 import numpy as np
 from PIL import Image, ImageEnhance
 import tesserocr
-# from skimage import img_as_ubyte, img_as_uint
-# from skimage.filters import gaussian
-from scipy import stats
-
-# from chemdataextractor.doc.text import Sentence
-# from chemdataextractor.parse.cem import BaseParser
-# from .utils.processing import isolate_patches, erase_elements
-# from .parse import ChemSchematicResolverTokeniser
-# from .models.segments import Crop, Rect
 
 log = logging.getLogger('extract.ocr')
 
@@ -84,17 +74,10 @@ def cv2_preprocess(img):
     img = cv2.resize(img, (0,0), fx=3, fy=3)
     kernel = np.ones((3, 3), np.uint8)
 
-
     img = cv2.erode(img, kernel, iterations=1)
     img = cv2.dilate(img, kernel, iterations=1)
 
-
-    # apply a blur
-    # gaussian noise
     img = cv2.threshold(cv2.GaussianBlur(img, (0, 0), 1), 100, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
-
-    # this can be used for salt and pepper noise (not necessary here)
-    #img = cv2.adaptiveThreshold(cv2.medianBlur(img, 7), 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 2)
 
     cv2.imwrite('temp.png', img)
     return 'temp.png'
@@ -106,179 +89,6 @@ def pil_enhance(image_path):
     contrast = ImageEnhance.Contrast(image)
     contrast.enhance(4).save('temp.png')
     return 'temp.png'
-
-
-
-# def read_label(fig, label, whitelist=LABEL_WHITELIST, pad_val=0):
-#     """ Reads a label paragraph objects using ocr
-
-#     :param Figure fig: main figure
-#     :param Label label: Label object containing appropriate bounding box
-#     :param whitelist: list of allowed characters
-#     :param pad_val: value used for image padding (0 or 1)
-
-#     :rtype List[chemdataextractor.sentence]
-#     """
-#     crop = label.panel.create_crop(fig)
-
-#     blocks, avg_conf = choose_best_ocr_configuration(
-#         crop.img, x_offset=label.left, y_offset=label.top,
-#         psms=[PSM.SPARSE_TEXT, PSM.SINGLE_CHAR, PSM.SINGLE_LINE, PSM.SINGLE_WORD, PSM.SINGLE_BLOCK],
-#         whitelist=whitelist, pad_val=pad_val)
-
-#     if not blocks:
-#         return [], 0
-#     elif len(blocks) == 1 and blocks[0].text.strip() in ['+', '', ',', '.']:
-#         return [], 0
-
-#     log.debug('Confidence in OCR: %s' % avg_conf)
-
-#     raw_sentences = get_sentences(blocks)
-
-#     if len(raw_sentences) is not 0:
-#         # Tag each paragraph
-#         tagged_sentences = [Sentence(sentence, word_tokenizer=ChemSchematicResolverTokeniser(),
-#                                      parsers=[BaseParser()]) for sentence in raw_sentences]
-#     else:
-#         tagged_sentences = []
-
-#     return tagged_sentences, avg_conf
-
-
-# def read_conditions(fig, region, conf_threshold=OCR_CONFIDENCE, whitelist=CONDITIONS_WHITELIST, pad_val=0):
-#     """
-#     Reads conditions' text in `fig.img` detected inside `text_line` and returns the recognised OCR objects.
-#     :param Figure fig: figure containing unprocessed image
-#     :param TextCandidate region:  a TextCandidate storing the region recognised as reaction conditions
-#     :param int conf_threshold:
-#     :param str whitelist: all characters that will be looked for in the text
-#     :param int pad_val: value used for padding (0 or 1)
-#     :return: tagged sentences if OCR is successful or empty list if failed
-#     :rtype: list[chemdataextractor.Sentence]|list[]
-#     """
-#     panel = region.panel
-#     region_crop = panel.create_padded_crop(fig, pad_width=(5, 5), pad_val=pad_val)
-
-#     # try:
-#     #     img = lift_subscripts(region_crop)
-#     # except ValueError:    # Cannot broadcast
-#     #     img = region_crop.img
-#     # finally:
-#     text, avg_conf = choose_best_ocr_configuration(region_crop.img, x_offset=panel.left, y_offset=panel.top,
-#                                                    psms=[PSM.SINGLE_BLOCK,PSM.SINGLE_LINE, PSM.SINGLE_WORD],
-#                                                    whitelist=whitelist, pad_val=pad_val)
-#     return text
-#     # raw_sentence = get_sentences(text)
-#     #
-#     # if len(raw_sentence) == 1:
-#     #     # Tag each paragraph
-#     #     tagged_sentence = Sentence(raw_sentence[0].strip(), word_tokenizer=ChemSchematicResolverTokeniser(),
-#     #                                parsers=[BaseParser()])
-#     # else:
-#     #     tagged_sentence = []
-#     #
-#     # log.debug('Tagged sentence: %s' % tagged_sentence)
-#     # log.debug('Confidence in OCR: %s' % avg_conf)
-#     # return tagged_sentence if avg_conf > conf_threshold else []
-
-
-# def lift_subscripts(textline_crop, shift=None):
-#     """
-#     Finds subscripts in a text line and moves them up.
-#
-#     Recognise individual, relevant connected components in a text line. If they're recognised as digits, moves them
-#     up slightly to aid optical character recognition of the text line.
-#     :param Crop textline_crop: a Crop object containing the text line region
-#     :param shift: vertical shift used for lifting
-#     :return: np.ndarray containing a new text line with subscripts moved up
-#     :rtype: np.ndarray
-#     """
-#     subs = []
-#     mode_bottom = stats.mode([cc.bottom for cc in textline_crop.connected_components]).mode[0]
-#     for cc in textline_crop.connected_components:
-#         if cc.bottom > mode_bottom:
-#             cc_img = isolate_patches(textline_crop, [cc])
-#             cc_img = cc_img.img
-#             char, confidence = choose_best_ocr_configuration(cc_img, psms=[PSM.SINGLE_WORD, PSM.SINGLE_CHAR],
-#                                                              whitelist=CONDITIONS_WHITELIST, pad_val=0)
-#             if char and char[0].text.strip() in list('0123456789'):
-#                 subs.append(cc)
-#
-#     f_erased = erase_elements(textline_crop, subs)
-#     if subs:
-#         if shift is None:
-#             shift = int(np.mean([sub.bottom for sub in subs]) - mode_bottom)
-#
-#         for sub in subs:
-#             arr = textline_crop.img[sub.top:sub.bottom + 1, sub.left:sub.right + 1]
-#             f_erased.img[sub.top - shift:sub.bottom + 1 - shift, sub.left:sub.right + 1] = arr
-#         return f_erased.img
-#
-#     else:
-#         return textline_crop.img
-
-
-# def read_isolated_conditions(isolated_block):
-#     """
-#     Helper function to read conditions from isolated connected components segmented as conditions' text characters
-#     :param isolated_block:
-#     :return: tagged sentences if OCR is successful or empty list if failed
-#     :rtype: list[chemdataextractor.Sentence]|list[]
-#     """
-#     fig = isolated_block
-#     conditions_region = isolated_block.get_bounding_box()
-#     return read_conditions(fig, conditions_region)
-
-# def img_as_pil(arr, format_str=None):
-#     """Convert an scikit-image image (ndarray) to a PIL object.
-#
-#     Derived from code in scikit-image PIL IO plugin.
-#
-#     :param numpy.ndarray raw_img: The image to convert.
-#     :return: PIL image.
-#     :rtype: Image
-#     """
-#     if arr.ndim == 3:
-#         arr = img_as_ubyte(arr)
-#         mode = {3: 'RGB', 4: 'RGBA'}[arr.shape[2]]
-#
-#     elif format_str in ['png', 'PNG']:
-#         mode = 'I;16'
-#         mode_base = 'I'
-#
-#         if arr.dtype.kind == 'f':
-#             arr = img_as_uint(arr)
-#
-#         elif arr.max() < 256 and arr.min() >= 0:
-#             arr = arr.astype(np.uint8)
-#             mode = mode_base = 'L'
-#
-#         else:
-#             arr = img_as_uint(arr)
-#
-#     else:
-#         arr = img_as_ubyte(arr)
-#         mode = 'L'
-#         mode_base = 'L'
-#
-#     try:
-#         array_buffer = arr.tobytes()
-#     except AttributeError:
-#         array_buffer = arr.tostring()  # Numpy < 1.9
-#
-#     if arr.ndim == 2:
-#         im = Image.new(mode_base, arr.T.shape)
-#         try:
-#             im.frombytes(array_buffer, 'raw', mode)
-#         except AttributeError:
-#             im.fromstring(array_buffer, 'raw', mode)  # PIL 1.1.7
-#     else:
-#         image_shape = (arr.shape[1], arr.shape[0])
-#         try:
-#             im = Image.frombytes(mode, image_shape, array_buffer)
-#         except AttributeError:
-#             im = Image.fromstring(mode, image_shape, array_buffer)  # PIL 1.1.7
-#     return im
 
 
 # These enums just wrap tesserocr functionality, so we can return proper enum members instead of ints.
@@ -490,12 +300,6 @@ def get_text(img, x_offset=0, y_offset=0, psm=PSM.SINGLE_LINE, img_padding=20, w
 
     blocks = []
 
-    #     with tesserocr.PyTessBaseAPI(psm=psm, oem=tesserocr.OEM.TESSERACT_LSTM_COMBINED) as api:
-
-    # Convert image to PIL to load into tesseract (suppress precision loss warning)
-    # with warnings.catch_warnings(record=True) as ws:
-    #     pil_img = img_as_pil(img)
-    # api.SetImage(pil_img)
     api.SetPageSegMode(psm)
     api.SetImage(PIL.Image.fromarray(img, mode='L'))
     if whitelist is not None:
@@ -568,7 +372,7 @@ def get_text(img, x_offset=0, y_offset=0, psm=PSM.SINGLE_LINE, img_padding=20, w
     return blocks
 
 
-class TextElement():
+class TextElement:
     """Abstract base.py class for all text elements."""
 
     def __init__(self, text, left, right, top, bottom, orientation, writing_direction, textline_order, deskew_angle,
@@ -798,7 +602,6 @@ class TextSymbol(TextElement):
     def __init__(self, text, left, right, top, bottom, orientation, writing_direction, textline_order, deskew_angle,
                  confidence, is_dropcap, is_subscript, is_superscript):
         """
-
         :param string text: Recognized text content.
         :param int left: Left edge of bounding box.
         :param int right: Right edge of bounding box.
@@ -868,7 +671,13 @@ class TextParserAdapter:
 class OCRAnalyser:
     def __init__(self, img, ocr_output, conf_threshold):
         """Initialization is based on the initial output of the OCR engine. `ocr_output` must be a list/tuple, not
-        an individual TextElement (or instance of its subclass)"""
+        an individual TextElement (or instance of its subclass)
+        :param img: image from which to recognise text
+        :type img: np.ndarray
+        :param ocr_output: initial output from the OCR engine
+        :tyoe ocr_outputs: list[TextBlock]
+        :param conf_threshold: threshold for detection confidence used to perform finer-grained analysis
+        :type conf_threshold: float"""
         self.img = img
         self.ocr_output = ocr_output
 
@@ -908,6 +717,9 @@ class OCRAnalyser:
         return self.text_lines
 
     def analyse_word(self, w):
+        """Analyse a single word
+        param w: recognised word to be further analysed
+        type w: TextWord"""
         confidence, text = self._analyse(w)
         if confidence > self.conf_threshold:
             self._text.append(text)

@@ -26,8 +26,8 @@ from urllib.error import URLError
 import cirpy
 
 from reactiondataextractor.models.base import BaseExtractor
-from ..models.reaction import Label
-from ..ocr import ASSIGNMENT, SEPARATORS, CONCENTRATION, LABEL_WHITELIST, img_to_text
+from reactiondataextractor.models.reaction import Label
+from reactiondataextractor.ocr import ASSIGNMENT, SEPARATORS, CONCENTRATION, LABEL_WHITELIST, img_to_text
 # from ..utils.processing import dilate_fragments
 # from .. import settings
 
@@ -62,7 +62,7 @@ class LabelExtractor(BaseExtractor):
     #     self.confidence_threshold = confidence_thresh
     #     self._extracted = None
     def __init__(self, fig, priors):
-        self.fig = fig
+        super().__init__(fig)
         self.priors = priors
 
     def extract(self):

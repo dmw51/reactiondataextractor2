@@ -17,14 +17,14 @@ import torch
 from matplotlib.patches import Rectangle
 from scipy.ndimage import label
 # from tensorflow.keras.models import load_model
-from torch import load, device
-from reactiondataextractor.config import ExtractorConfig, Config
+from torch import load, device, nn
+from configs import ExtractorConfig, Config
 from reactiondataextractor.models.base import BaseExtractor, Candidate
 from reactiondataextractor.models.exceptions import NotAnArrowException
 from reactiondataextractor.models.segments import FigureRoleEnum, PanelMethodsMixin, Panel, Figure
 from reactiondataextractor.utils import skeletonize, is_a_single_line
 from reactiondataextractor.models.geometry import Point, Line
-from reactiondataextractor.processors import Isolator, EdgeExtractor
+from reactiondataextractor.processors import Isolator, Binariser
 
 log = logging.getLogger('arrows')
 
@@ -34,7 +34,7 @@ class ArrowExtractor(BaseExtractor):
 
     def __init__(self, fig):
         super().__init__(fig)
-        self.solid_arrow_extractor = SolidArrowCandidateExtractor(fig)
+        self.line_arrow_extractor = LineArrowCandidateExtractor(fig)
         self.curly_arrow_extractor = CurlyArrowCandidateExtractor(fig)
 
         # self.arrow_detector = load_model(ExtractorConfig.ARROW_DETECTOR_PATH)
@@ -57,15 +57,32 @@ class ArrowExtractor(BaseExtractor):
 
 
     @property
+    def fig(self):
+        return self._fig
+
+    @fig.setter
+    def fig(self, val):
+        self._fig = val
+        self.curly_arrow_extractor._fig = val
+        self.line_arrow_extractor._fig = val
+
+    @property
     def extracted(self):
         return self.arrows
 
     def extract(self):
         """Extracts all types of arrows, then combines them, filters duplicates and finally reclassifies them"""
-        solid_arrows = self.solid_arrow_extractor.extract()
-        curly_arrows = self.curly_arrow_extractor.extract()
-        arrows = self.remove_duplicates(solid_arrows + curly_arrows)
+        line_arrow_proposals = self.line_arrow_extractor.extract()
+        curly_arrow_proposals = self.curly_arrow_extractor.extract()
+        arrows = self.remove_duplicates(line_arrow_proposals + curly_arrow_proposals)
+        # import demo
+        # out = demo.draw_fig(self.fig)
+        # out = demo.plot_arrow_candidates(out, arrows)
         arrows = self.filter_false_positives(arrows)
+        # out = demo.plot_selected_arrow_candidates(out, arrows)
+        # demo.savefig('extracted_arrows.png')
+        # plt.show()
+        # plot_arrow_candidates(self.fig, arrows)
         solid_arrows, eq_arrows, res_arrows,  curly_arrows = self.reclassify(arrows)
         self._solid_arrows = solid_arrows
         self._eq_arrows = eq_arrows
@@ -104,6 +121,7 @@ class ArrowExtractor(BaseExtractor):
     def filter_false_positives(self, arrows):
         arrow_crops = [self.preprocess_model_input(arrow) for arrow in arrows]
         arrow_crops = np.stack(arrow_crops, axis=0)
+        print(f'number of arrow crops: {len(arrow_crops)}')
         # arrows_pred = self.arrow_detector.predict(x=arrow_crops).squeeze()
         #torch syntax below
         with torch.no_grad():
@@ -188,8 +206,6 @@ class ArrowExtractor(BaseExtractor):
         return raw_arrow_crop
 
 
-
-
     def instantiate_arrow(self, arrow_candidate, cls_idx):
         return self._class_dict[cls_idx](**arrow_candidate.pass_attributes())
 
@@ -208,30 +224,31 @@ class ArrowExtractor(BaseExtractor):
         return solid_arrows, eq_arrows, res_arrows, curly_arrows
 
 
-class SolidArrowCandidateExtractor(BaseExtractor):
-    """This solid arrow extractor is less restrictive in filtering out candidates for solid arrows. Its main goal
-    is to provide suitable candidates which are to be filtered out by another model."""
+class LineArrowCandidateExtractor(BaseExtractor):
+    """This line-based arrow candidate extractor is less restrictive in filtering out candidates for straight
+    (solid, resonance, equilibrium) arrows. Its main goal is to provide suitable candidates which are to be
+    filtered out by another model."""
 
     def __init__(self, fig):
-        self.arrows = None
+        self.candidates = None
 
         super().__init__(fig)
 
     def extract(self):
-        self.arrows = self.find_solid_arrows()
-        return self.arrows
+        self.candidates = self.find_line_candidates()
+        return self.candidates
 
 
     @property
     def extracted(self):
         """Returns extracted objects"""
-        return self.arrows
+        return self.candidates
 
-    def find_solid_arrows(self, ):
+    def find_line_candidates(self, ):
         """
-        Finds all solid (straight) arrows in ``fig`` subject to ``threshold`` number of pixels and ``min_arrow_length``
+        Finds all line arrow candidates in ``fig`` subject to ``threshold`` number of pixels and ``min_arrow_length``
         minimum line length.
-        :return: collection of arrow objects
+        :return: collection of arrow candidates
         :rtype: list
         """
         def inrange(cc, point):
@@ -258,7 +275,7 @@ class SolidArrowCandidateExtractor(BaseExtractor):
             except IndexError:
                 continue  # Line crossing multiple connected components found
             # Break the line down and check whether it's a single line
-            if not is_a_single_line(skeletonized, parent_panel, int(ExtractorConfig.SOLID_ARROW_MIN_LENGTH*0.5)):
+            if not is_a_single_line(skeletonized, parent_panel, int(ExtractorConfig.SOLID_ARROW_MIN_LENGTH)):
                 continue
 
             labelled_img, _ = label(img)
@@ -318,7 +335,7 @@ class CurlyArrowCandidateExtractor(BaseExtractor):
                 cv2.drawContours(mask, [cnt], 0, 255, -1)
                 pixels = np.transpose(np.nonzero(mask))
                 top, left, bottom, right = y, x, y + h, x + w
-                arrow_cand = ArrowCandidate(pixels, contour=cnt, panel=Panel((top, left, bottom, right), Config.FIGURE))
+                arrow_cand = ArrowCandidate(pixels, contour=cnt, panel=Panel((top, left, bottom, right)))
                 # arrow = CurlyArrow(pixels, Panel((top, left, bottom, right)), cnt)
 
 
@@ -345,14 +362,15 @@ class BaseArrow(PanelMethodsMixin):
     :param panel: bounding box of an arrow
     :type panel: Panel"""
 
-    def __init__(self, pixels, panel):
+    def __init__(self, pixels, panel, line=None, contour=None):
         if not all(isinstance(pixel, Point) for pixel in pixels):
             self.pixels = [Point(row=coords[0], col=coords[1]) for coords in pixels]
         else:
             self.pixels = pixels
 
-        # self.line = line
         self.panel = panel
+        self.line = line
+        self.contour = contour
         # slope = self.line.slope
         self._center_px = None
         self.reference_pt = self.compute_reaction_reference_pt()
@@ -378,11 +396,18 @@ class BaseArrow(PanelMethodsMixin):
         for i in unmerged_idx:
             new_children.append(self.children[i])
 
-    @abc.abstractmethod
     def initialize(self):
         """Given `pixels` and `panel` attributes, this method checks if other (relevant) initialization attributes have been
         precomputed. If not, these should be computed and set accordingly."""
-        pass
+        if self.line is None:
+            self.line = Line.approximate_line(self.pixels[0], self.pixels[-1])
+
+        if self.contour is None:
+            isolated_arrow_fig = Isolator(None, self, isolate_mask=True).process()
+            cnt, _ = cv2.findContours(isolated_arrow_fig.img,
+                                      ExtractorConfig.CURLY_ARROW_CNT_MODE, ExtractorConfig.CURLY_ARROW_CNT_METHOD)
+            assert len(cnt) == 1
+            self.contour = cnt[0]
 
     def compute_reaction_reference_pt(self):
         """Computes a reference point for a reaction step. This point alongside arrow's centerpoint to decide whether
@@ -391,11 +416,10 @@ class BaseArrow(PanelMethodsMixin):
         center point"""
         scaling_factor = 2
         pad_width = 10
-
-        isolated_arrow = Isolator(Config.FIGURE, self, isolate_mask=True).process()
+        isolated_arrow = Isolator(None, self, isolate_mask=True).process()
         arrow_crop = self.panel.create_padded_crop(isolated_arrow, pad_width=pad_width)
         arrow_crop.img = cv2.resize(arrow_crop.img, (0, 0), fx=scaling_factor, fy=scaling_factor)
-        binarised = EdgeExtractor(arrow_crop).process()
+        binarised = Binariser(arrow_crop).process()
         eroded = cv2.erode(binarised.img, np.ones((6, 6)), iterations=2)
 
         #Compute COM in the crop, then transform back to main figure coordinates
@@ -464,16 +488,16 @@ class SolidArrow(BaseArrow):
         super(SolidArrow, self).__init__(pixels, panel)
         self.sort_pixels()
 
-    def initialize(self):
-        if self.line is None:
-            self.line = Line.approximate_line(self.pixels[0], self.pixels[-1])
-
-        if self.contour is None:
-            isolated_arrow_fig = Isolator(None, self, isolate_mask=True).process()
-            cnt, _ = cv2.findContours(isolated_arrow_fig.img,
-                                      ExtractorConfig.CURLY_ARROW_CNT_MODE, ExtractorConfig.CURLY_ARROW_CNT_METHOD)
-            assert len(cnt) == 1
-            self.contour = cnt[0]
+    # def initialize(self):
+    #     if self.line is None:
+    #         self.line = Line.approximate_line(self.pixels[0], self.pixels[-1])
+    #
+    #     if self.contour is None:
+    #         isolated_arrow_fig = Isolator(None, self, isolate_mask=True).process()
+    #         cnt, _ = cv2.findContours(isolated_arrow_fig.img,
+    #                                   ExtractorConfig.CURLY_ARROW_CNT_MODE, ExtractorConfig.CURLY_ARROW_CNT_METHOD)
+    #         assert len(cnt) == 1
+    #         self.contour = cnt[0]
 
     @property
     def is_vertical(self):
@@ -516,7 +540,7 @@ class CurlyArrow(BaseArrow):
     def __init__(self, pixels, panel, contour=None, line=None):
         self.contour = contour
         super().__init__(pixels, panel)
-        self._line = None
+        self.line = None
 
     def initialize(self):
         if self.contour is None:
@@ -535,11 +559,11 @@ class ResonanceArrow(BaseArrow):
         super().__init__(pixels, panel)
         self.sort_pixels()
 
-    def initialize(self):
-        if self.line is None:
-            pass
-        if self.contour is None:
-            pass
+    # def initialize(self):
+    #     if self.line is None:
+    #         pass
+    #     if self.contour is None:
+    #         pass
 
 
 class EquilibriumArrow(BaseArrow):
@@ -550,11 +574,11 @@ class EquilibriumArrow(BaseArrow):
         super().__init__(pixels, panel)
         self.sort_pixels()
 
-    def initialize(self):
-        if self.line is None:
-            pass
-        if self.contour is None:
-            pass
+    # def initialize(self):
+    #     if self.line is None:
+    #         pass
+    #     if self.contour is None:
+    #         pass
 
 
 class ArrowCandidate(Candidate):
@@ -567,3 +591,81 @@ class ArrowCandidate(Candidate):
         self.panel = panel
         self.line = line
         self.contour = contour
+
+
+class ArrowClassifier(nn.Module):
+
+    def __init__(self):
+        super().__init__()
+        self.c1 = nn.Conv2d(1, 16, 3, padding='same')
+        self.bn1 = nn.BatchNorm2d(16)
+        self.c2 = nn.Conv2d(16, 32, 3, padding='same')
+        self.bn2 = nn.BatchNorm2d(32)
+        self.c3 = nn.Conv2d(32, 64, 3, padding='same')
+        self.bn3 = nn.BatchNorm2d(64)
+        self.c4 = nn.Conv2d(64, 128, 3, padding='same')
+        self.bn4 = nn.BatchNorm2d(128)
+        self.fc1 = nn.Linear(4 * 4 * 16 * 32, 4)
+
+    def forward(self, x):
+        x = self.c1(x)
+        x = self.bn1(x)
+        x = nn.MaxPool2d(2)(x)
+        x = self.c2(x)
+        x = self.bn2(x)
+        x = nn.MaxPool2d(2)(x)
+        # x = self.c3(x)
+        # x = self.bn3(x)
+        # x = nn.MaxPool2d(2)(x)
+        # x = self.c4(x)
+        # x = self.bn4(x)
+        # x = nn.MaxPool2d(2)(x)
+        x = nn.Flatten()(x)
+        x = self.fc1(x)
+        # print(x.shape)
+        x = nn.Softmax(dim=-1)(x)
+
+        return x
+
+
+class ArrowDetector(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.c1 = nn.Conv2d(1, 32, 3, padding='same', )
+        self.bn1 = nn.BatchNorm2d(32)
+        self.c2 = nn.Conv2d(32, 64, 3, padding='same')
+        self.bn2 = nn.BatchNorm2d(64)
+        self.c3 = nn.Conv2d(64, 128, 3, padding='same')
+        self.bn3 = nn.BatchNorm2d(128)
+        self.c4 = nn.Conv2d(128, 256, 3, padding='same')
+        self.bn4 = nn.BatchNorm2d(256)
+        self.c5 = nn.Conv2d(256, 512, 3, padding='same')
+        self.bn5 = nn.BatchNorm2d(512)
+        self.d1 = nn.Linear(2048, 64)
+        self.relu = nn.ReLU()
+        # ), activation='relu', kernel_regularizer='l2')
+        self.d2 = nn.Linear(64, 1)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        x = self.c1(x)
+        x = self.bn1(x)
+        x = nn.MaxPool2d(2)(x)
+        x = self.c2(x)
+        x = self.bn2(x)
+        x = nn.MaxPool2d(2)(x)
+        x = self.c3(x)
+        x = self.bn3(x)
+        x = nn.MaxPool2d(2)(x)
+        x = self.c4(x)
+        x = self.bn4(x)
+        x = nn.MaxPool2d(2)(x)
+        x = self.c5(x)
+        x = self.bn5(x)
+        x = nn.MaxPool2d(2)(x)
+        x = nn.Flatten()(x)
+        x = self.d1(x)
+        x = self.relu(x)
+        x = self.d2(x)
+        x = self.sigmoid(x)
+        return x
