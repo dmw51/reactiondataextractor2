@@ -244,7 +244,7 @@ class ProposalLayer(KL.Layer):
 
     def get_config(self):
         config = super(ProposalLayer, self).get_config()
-        config["config"] = self.config.to_dict()
+        config["configs"] = self.config.to_dict()
         config["proposal_count"] = self.proposal_count
         config["nms_threshold"] = self.nms_threshold
         return config
@@ -461,7 +461,7 @@ def detection_targets_graph(proposals, gt_class_ids, gt_boxes , config):
 
     # # Compute mask targets
     # boxes = positive_rois
-    # if config.USE_MINI_MASK:
+    # if configs.USE_MINI_MASK:
     #     # Transform ROI coordinates from normalized image space
     #     # to normalized mini-mask space.
     #     y1, x1, y2, x2 = tf.split(positive_rois, 4, axis=1)
@@ -524,7 +524,7 @@ class DetectionTargetLayer(KL.Layer):
 
     def get_config(self):
         config = super(DetectionTargetLayer, self).get_config()
-        config["config"] = self.config.to_dict()
+        config["configs"] = self.config.to_dict()
         return config
 
     def call(self, inputs):
@@ -1227,7 +1227,7 @@ class RDEModel(KM.Model):
             # # Apply bounding box deltas
             # # Shape: [boxes, (y1, x1, y2, x2)] in normalized coordinates
             # refined_rois = apply_box_deltas_graph(
-            #     rpn_rois[0, ...], deltas_specific * self.config.BBOX_STD_DEV)
+            #     rpn_rois[0, ...], deltas_specific * self.configs.BBOX_STD_DEV)
             # # Clip boxes to image window
             #
             # #add dummy axis to conform to the required shape
@@ -1253,9 +1253,9 @@ class RDEModel(KM.Model):
         classes = tf.squeeze(classes, axis=-1)
         classes, scores = [tf.unstack(x, axis=0) for x in (classes, scores)]
         classes = tf.cast(classes, tf.uint8)
-        # conf_masks = [s> self.config.DETECTION_MIN_CONFIDENCE for s in scores]
+        # conf_masks = [s> self.configs.DETECTION_MIN_CONFIDENCE for s in scores]
         class_filter = [s > self.config.DETECTION_MIN_CONFIDENCE for s in scores]
-        # foreground_filter = [s > self.config.DETECTION_MIN_CONFIDENCE for s in rpn_scores]
+        # foreground_filter = [s > self.configs.DETECTION_MIN_CONFIDENCE for s in rpn_scores]
         out_lst = [[], [], []]
         for i in range(len(x)):
           for idx, output in enumerate([boxes, classes, scores]):
@@ -1298,8 +1298,8 @@ def refine_detections_graph(rois, probs, deltas, window, config):
     # Filter out background boxes
     keep = tf.compat.v1.where(class_ids > 0)[:, 0]
     # Filter out low confidence boxes
-    # if config.DETECTION_MIN_CONFIDENCE:
-    #     conf_keep = tf.compat.v1.where(class_scores >= config.DETECTION_MIN_CONFIDENCE)[:, 0]
+    # if configs.DETECTION_MIN_CONFIDENCE:
+    #     conf_keep = tf.compat.v1.where(class_scores >= configs.DETECTION_MIN_CONFIDENCE)[:, 0]
     #     keep = tf.sets.intersection(tf.expand_dims(keep, 0),
     #                                     tf.expand_dims(conf_keep, 0))
     #     keep = tf.sparse.to_dense(keep)[0]
@@ -1524,7 +1524,7 @@ def rpn_class_loss_graph(rpn_match, rpn_class_logits):
 def rpn_bbox_loss_graph(config, target_bbox, rpn_match, rpn_bbox):
     """Return the RPN bounding box loss graph.
 
-    config: the model config object.
+    configs: the model configs object.
     target_bbox: [batch, max positive anchors, (dy, dx, log(dh), log(dw))].
         Uses 0 padding to fill in unsed bbox deltas.
     rpn_match: [batch, anchors, 1]. Anchor match type. 1=positive,
@@ -1720,7 +1720,7 @@ class DataGenerator(KU.Sequence):
         when multiprocessing=True.
 
         dataset: The Dataset object to pick data from
-        config: The model config object
+        configs: The model configs object
         shuffle: If True, shuffles the samples before every epoch
         augmentation: Optional. An imgaug (https://github.com/aleju/imgaug) augmentation.
             For example, passing imgaug.augmenters.Fliplr(0.5) flips images
@@ -1761,11 +1761,11 @@ class DataGenerator(KU.Sequence):
         # Anchors
         # [anchor_count, (y1, x1, y2, x2)]
         self.backbone_shapes = compute_backbone_shapes(config, config.IMAGE_SHAPE)
-        # self.anchors = utils.generate_pyramid_anchors(config.RPN_ANCHOR_SCALES,
-        #                                               config.RPN_ANCHOR_RATIOS,
+        # self.anchors = utils.generate_pyramid_anchors(configs.RPN_ANCHOR_SCALES,
+        #                                               configs.RPN_ANCHOR_RATIOS,
         #                                               self.backbone_shapes,
-        #                                               config.BACKBONE_STRIDES,
-        #                                               config.RPN_ANCHOR_STRIDE)
+        #                                               configs.BACKBONE_STRIDES,
+        #                                               configs.RPN_ANCHOR_STRIDE)
         #Generate_anchors returns anchors of shape [batch_size, num_anchors, 4], but generator expects [num_anchors,4]
         #As a temporary work-around, set batch_size = 1 and squeeze out the 0th dimension
         self.anchors = generate_anchors(self.config,
@@ -1840,7 +1840,7 @@ class DataGenerator(KU.Sequence):
                         (self.batch_size, self.config.MAX_GT_INSTANCES, 4), dtype=np.int32)
                     # batch_gt_masks = np.zeros(
                     #     (self.batch_size, gt_masks.shape[0], gt_masks.shape[1],
-                    #      self.config.MAX_GT_INSTANCES), dtype=gt_masks.dtype)
+                    #      self.configs.MAX_GT_INSTANCES), dtype=gt_masks.dtype)
                     if self.random_rois:
                         batch_rpn_rois = np.zeros(
                             (self.batch_size, rpn_rois.shape[0], 4), dtype=rpn_rois.dtype)
@@ -2268,12 +2268,12 @@ def load_image_gt(dataset, config, image_id, augmentation=None):
     original_shape = image.shape
     image, window, scale, padding, crop = utils.resize_image(
         image,
-        # min_dim=config.IMAGE_MIN_DIM,
+        # min_dim=configs.IMAGE_MIN_DIM,
         min_dim=config.IMAGE_SHAPE[0],
         min_scale=config.IMAGE_MIN_SCALE,
-        # max_dim=config.IMAGE_MAX_DIM,
+        # max_dim=configs.IMAGE_MAX_DIM,
         max_dim=config.IMAGE_SHAPE[0],
-        # mode=config.IMAGE_RESIZE_MODE)
+        # mode=configs.IMAGE_RESIZE_MODE)
         mode='square')
     # mask = utils.resize_mask(mask, scale, padding, crop)
     bbox = utils.resize_bbox(bbox, scale, padding, crop )
@@ -2326,8 +2326,8 @@ def load_image_gt(dataset, config, image_id, augmentation=None):
     active_class_ids[source_class_ids] = 1
 
     # # Resize masks to smaller size to reduce memory usage
-    # if config.USE_MINI_MASK:
-    #     mask = utils.minimize_mask(bbox, mask, config.MINI_MASK_SHAPE)
+    # if configs.USE_MINI_MASK:
+    #     mask = utils.minimize_mask(bbox, mask, configs.MINI_MASK_SHAPE)
 
     # Image meta data
     image_meta = compose_image_meta(image_id, original_shape, image.shape,
@@ -2340,7 +2340,7 @@ def preprocess_image(image, config, image_id, active_class_ids):
     """Preprocesses an image prior to prediction.
     Similar to `load_image_gt`, but does not manipulate classes or bboxes.
 
-    Takes in the raw image and appropriate config with the `image_id` usually set to a dummy variable of -1.
+    Takes in the raw image and appropriate configs with the `image_id` usually set to a dummy variable of -1.
     Resizes the image, and composes image meta. Returns the resized and padded image."""
 
     original_shape = image.shape
@@ -2377,12 +2377,12 @@ def preprocess_image(image, config, image_id, active_class_ids):
 
     image, window, scale, padding, crop = utils.resize_image(
         image,
-        # min_dim=config.IMAGE_MIN_DIM,
+        # min_dim=configs.IMAGE_MIN_DIM,
         min_dim=config.IMAGE_SHAPE[0],
         min_scale=config.IMAGE_MIN_SCALE,
-        # max_dim=config.IMAGE_MAX_DIM,
+        # max_dim=configs.IMAGE_MAX_DIM,
         max_dim=config.IMAGE_SHAPE[0],
-        # mode=config.IMAGE_RESIZE_MODE)
+        # mode=configs.IMAGE_RESIZE_MODE)
         mode='square')
 
     # Image meta data

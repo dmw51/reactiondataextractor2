@@ -90,11 +90,13 @@ class UnifiedExtractor(BaseExtractor):
         self.conditions_extractor._fig = val
 
     def extract(self):
-        boxes, classes, scores = self.model.detect()
+        boxes, classes = self.model.detect()
+        # print('unified detection finished...')
         # boxes = self.adjust_coord_order_detectron(boxes)
         out_diag_boxes = [box for box, class_ in zip(boxes, classes) if self._class_dict[class_] == Diagram]
-        # print('posprocessing diags...')
+        # print('potsprocessing diags...')
         diags = self.postprocess_diagrams(out_diag_boxes)
+        # print('potsprocessing diags finished...')
         text_regions = [TextRegionCandidate(box, class_) for box, class_ in zip(boxes, classes)
                         if self._class_dict[class_] in [Label, Conditions]]
         conditions, labels = self.postprocess_text_regions(text_regions)
@@ -106,6 +108,7 @@ class UnifiedExtractor(BaseExtractor):
         # conditions, labels = [self.remove_duplicates(group) for group in [conditions, labels]]
         # conditions, labels = [self.extract_elements(group, extractor) for group, extractor
         #                       in zip([conditions, labels], [self.conditions_extractor, self.label_extractor])]
+        print('unified extraction finished...')
         return diags, conditions, labels
 
     def add_diags_to_conditions(self, diags, arrows):
@@ -128,6 +131,7 @@ class UnifiedExtractor(BaseExtractor):
         adjusted_candidates = self.adjust_bboxes(text_regions)
         conditions, labels = self.reclassify(adjusted_candidates, self.all_arrows, self.diagram_extractor.extracted)
         conditions, labels = [self.remove_duplicates(group) for group in [conditions, labels]]
+        conditions = self.clean_conditions(conditions)
         conditions, labels = [self.extract_elements(group, extractor) for group, extractor
                               in zip([conditions, labels], [self.conditions_extractor, self.label_extractor])]
         self.conditions_extractor._extracted = self.filter_text_false_positives(conditions, self.diagram_extractor.extracted)
@@ -200,6 +204,21 @@ class UnifiedExtractor(BaseExtractor):
 
         return filtered_regions
 
+    def clean_conditions(self, conditions):
+        # Clean very large patches (poor optimisation)
+        # Clean patches that are very far away from an arrow (should overlap or be very close)
+        # Clean patches that span way beyond the arrow along its direction -- this might not be necessary
+        max_diag_area = np.max([d.panel.area for d in self.diagram_extractor.diags])
+        filtered_conditions = []
+        for c in conditions:
+            closest_arrow = self._find_closest(c, self.all_arrows)
+            dist = c.panel.edge_separation(closest_arrow.panel)
+            well_optimized = c.panel.area < ExtractorConfig.CONDITIONS_MAX_AREA_FRACTION * max_diag_area
+            close_to_arrow = dist < ExtractorConfig.CONDITIONS_ARROW_MAX_DIST
+            if well_optimized and close_to_arrow:
+                filtered_conditions.append(c)
+
+        return filtered_conditions
 
 
     def plot_extracted(self, ax):
@@ -323,6 +342,7 @@ class UnifiedExtractor(BaseExtractor):
         class_ =  self._class_dict[obj._prior_class]
         seps = {k: obj.edge_separation(v) for k, v in closest.items()}
         thresh_reclassification_dist = ExtractorConfig.UNIFIED_RECLASSIFY_DIST_THRESH_COEFF * np.sqrt(obj.area)
+
         if seps['arrow'] <= seps['diag'] and seps['arrow'] < thresh_reclassification_dist:
             # ### Form 4 points, 2 at end of arrows (or extending a bit further), 2 extending from a line normal to the
             # ### arrow's bounding ellipse, and check which is closest. Reclassify as conditions if obj is closer to
@@ -684,10 +704,10 @@ class Detectron2Adapter:
         self.use_tiler = use_tiler
 
     def detect(self):
-        boxes, classes, scores = self._detect()
+        boxes, classes = self._detect()
         boxes = self.postprocess(boxes)
 
-        return boxes, classes, scores
+        return boxes, classes
 
     def _detect(self):
         with warnings.catch_warnings():
@@ -733,7 +753,12 @@ class Detectron2Adapter:
                 tile_predictions = tiler.transform_tile_predictions(tile_preds)
                 tile_predictions = tiler.filter_small_boxes(tile_predictions)
                 predictions = self.combine_predictions(predictions, tile_predictions)
-        return predictions.pred_boxes.tensor.numpy(), predictions.pred_classes.numpy(), predictions.scores.numpy()
+
+            high_scores = predictions.scores.numpy() > ExtractorConfig.UNIFIED_PRED_THRESH
+            pred_boxes = predictions.pred_boxes.tensor.numpy()[high_scores]
+            pred_classes = predictions.pred_classes.numpy()[high_scores]
+        # return predictions.pred_boxes.tensor.numpy(), predictions.pred_classes.numpy(), predictions.scores.numpy()
+        return pred_boxes, pred_classes,
 
     def postprocess(self, boxes):
 

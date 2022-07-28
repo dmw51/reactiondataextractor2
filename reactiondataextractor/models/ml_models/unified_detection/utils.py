@@ -532,7 +532,7 @@ def resize_bbox(boxes, scale, padding, crop=None):
 #
 #
 # # TODO: Build and use this function to reduce code duplication
-# def mold_mask(mask, config):
+# def mold_mask(mask, configs):
 #     pass
 #
 #

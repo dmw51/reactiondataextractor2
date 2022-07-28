@@ -121,7 +121,7 @@ class ArrowExtractor(BaseExtractor):
     def filter_false_positives(self, arrows):
         arrow_crops = [self.preprocess_model_input(arrow) for arrow in arrows]
         arrow_crops = np.stack(arrow_crops, axis=0)
-        print(f'number of arrow crops: {len(arrow_crops)}')
+        # print(f'number of arrow crops: {len(arrow_crops)}')
         # arrows_pred = self.arrow_detector.predict(x=arrow_crops).squeeze()
         #torch syntax below
         with torch.no_grad():

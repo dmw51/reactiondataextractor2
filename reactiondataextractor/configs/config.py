@@ -44,7 +44,7 @@ class ExtractorConfig(Config):
     # Threshold for reclassifying textual elements based on proximity to arrows and diagrams
     UNIFIED_RECLASSIFY_DIST_THRESH_COEFF = 2
     # Threshold for object detection
-    UNIFIED_PRED_THRESH = 0.5
+    UNIFIED_PRED_THRESH = 0.25
     # Threshold for filtering false positives based on intersection over area
     UNIFIED_IOA_FILTER_THRESH = 0.9
     # Threshold for selecting small detections from image tiles (only small boxes are chosen)
@@ -59,6 +59,10 @@ class ExtractorConfig(Config):
     DIAG_MAX_AREA_FRACTION = 0.45
     # Path to the dictionary containing common chemical species' names
     CONDITIONS_SPECIES_PATH = os.path.join(Config.ROOT_DIR, '../dict/species.txt')
+    # Threshold factor to filter out very big conditions regions (poor detections)
+    CONDITIONS_MAX_AREA_FRACTION = 1.5
+    # Maximum distance between conditions and the nearest arrow (assumes smaller image dimension is 1024 px)
+    CONDITIONS_ARROW_MAX_DIST = 75
 
 
 class ProcessorConfig(Config):
