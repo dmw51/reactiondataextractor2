@@ -31,6 +31,7 @@ log = logging.getLogger('arrows')
 
 
 class ArrowExtractor(BaseExtractor):
+    """Main arrow extractor class combining the different elements of the arrow extraction process"""
 
     def __init__(self, fig):
         super().__init__(fig)
@@ -225,9 +226,9 @@ class ArrowExtractor(BaseExtractor):
 
 
 class LineArrowCandidateExtractor(BaseExtractor):
-    """This line-based arrow candidate extractor is less restrictive in filtering out candidates for straight
+    """This line-based arrow candidate extractor filters candidates for straight
     (solid, resonance, equilibrium) arrows. Its main goal is to provide suitable candidates which are to be
-    filtered out by another model."""
+    selected by another model."""
 
     def __init__(self, fig):
         self.candidates = None
@@ -238,16 +239,14 @@ class LineArrowCandidateExtractor(BaseExtractor):
         self.candidates = self.find_line_candidates()
         return self.candidates
 
-
     @property
     def extracted(self):
         """Returns extracted objects"""
         return self.candidates
 
-    def find_line_candidates(self, ):
+    def find_line_candidates(self):
         """
-        Finds all line arrow candidates in ``fig`` subject to ``threshold`` number of pixels and ``min_arrow_length``
-        minimum line length.
+        Finds all line arrow candidates in `the figure subject to dynamically computed minimum length and threshold.
         :return: collection of arrow candidates
         :rtype: list
         """
@@ -283,8 +282,6 @@ class LineArrowCandidateExtractor(BaseExtractor):
             parent_label = labelled_img[p1.row, p1.col]
             arrow_pixels = np.nonzero(labelled_img == parent_label)
             arrow_pixels = np.array(list(zip(*arrow_pixels)))
-            panel_top, panel_bottom = np.min(arrow_pixels[:, 0]), np.max(arrow_pixels[:, 0])+1
-            panel_left, panel_right = np.min(arrow_pixels[:, 1]), np.max(arrow_pixels[:, 1])+1
 
             arrow_candidates.append(ArrowCandidate(pixels=arrow_pixels,
                                                panel=parent_panel))
@@ -303,6 +300,8 @@ class LineArrowCandidateExtractor(BaseExtractor):
 
 
 class CurlyArrowCandidateExtractor(BaseExtractor):
+    """This extractor selects proposals for curly arrows based on simple heuristics to feed to the main detection
+    model"""
 
     def __init__(self, fig):
         self.arrows = None
@@ -313,6 +312,10 @@ class CurlyArrowCandidateExtractor(BaseExtractor):
         return self.arrows
 
     def extract(self):
+        """Extracts the proposals.
+        Extraction is done by analysing contours of individual connected components. The following characteristics are
+        probed: bounding box area (filters v. small ccs), relative contour/bbox area (selects large, sparse ccs), and
+        convex hull (arrows should have a relatively simple convex hull)"""
         img_area = self.img.shape[0] * self.img.shape[1]
         # img = cv2.dilate(self.img, np.ones((2,2)), iterations=2)
         contours, hierarchy = cv2.findContours(self.img, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
@@ -338,13 +341,11 @@ class CurlyArrowCandidateExtractor(BaseExtractor):
                 arrow_cand = ArrowCandidate(pixels, contour=cnt, panel=Panel((top, left, bottom, right)))
                 # arrow = CurlyArrow(pixels, Panel((top, left, bottom, right)), cnt)
 
-
                 found_arrows.append(arrow_cand)
         self.arrows = found_arrows
         return found_arrows
 
     def plot_extracted(self, ax):
-
         """Adds extracted panels onto a canvas of ``ax``"""
         if not self.extracted:
             pass
@@ -355,12 +356,17 @@ class CurlyArrowCandidateExtractor(BaseExtractor):
                                       facecolor='y', edgecolor=None, alpha=0.4)
                 ax.add_patch(rect_bbox)
 
+
 class BaseArrow(PanelMethodsMixin):
     """Base arrow class common to all arrows
     :param pixels: pixels forming the arrows
     :type pixels: list[Point] or list[(int, int)]
     :param panel: bounding box of an arrow
-    :type panel: Panel"""
+    :type panel: Panel
+    :param line: line associated with an arrow (if any)
+    :type line: Line
+    :param contour: contour af an arrow
+    :type contour: np.ndarray"""
 
     def __init__(self, pixels, panel, line=None, contour=None):
         if not all(isinstance(pixel, Point) for pixel in pixels):
@@ -397,8 +403,8 @@ class BaseArrow(PanelMethodsMixin):
             new_children.append(self.children[i])
 
     def initialize(self):
-        """Given `pixels` and `panel` attributes, this method checks if other (relevant) initialization attributes have been
-        precomputed. If not, these should be computed and set accordingly."""
+        """Given `pixels` and `panel` attributes, this method checks if other (relevant) initialization attributes
+        have been precomputed. If not, these should be computed and set accordingly."""
         if self.line is None:
             self.line = Line.approximate_line(self.pixels[0], self.pixels[-1])
 
@@ -410,10 +416,12 @@ class BaseArrow(PanelMethodsMixin):
             self.contour = cnt[0]
 
     def compute_reaction_reference_pt(self):
-        """Computes a reference point for a reaction step. This point alongside arrow's centerpoint to decide whether
-        a diagram belongs to reactants or products of a step (by comparing pairwise distances). This reference point
-        is a centre of mass in an eroded arrow crop (erosion further moves the original centre of mass away from the
-        center point"""
+        """Computes a reference point for a reaction step. This point alongside arrow's center point is used to decide
+        whether a diagram belongs to reactants or products of a step (by comparing pairwise distances).
+        This reference point is a centre of mass in an eroded arrow crop (erosion further moves the original centre of
+        mass away from the center point to facilitate comparison
+        return: row, col coordinates of the centre of mass of the eroded arrow
+        rtype: tuple"""
         scaling_factor = 2
         pad_width = 10
         isolated_arrow = Isolator(None, self, isolate_mask=True).process()
@@ -429,7 +437,6 @@ class BaseArrow(PanelMethodsMixin):
         row, col = arrow_crop.in_main_fig((row, col))
 
         return col, row  # x, y
-
 
     @property
     def center_px(self):
@@ -463,15 +470,19 @@ class BaseArrow(PanelMethodsMixin):
 
         return self._center_px
 
-    @abc.abstractmethod
     def sort_pixels(self):
-        """This method is used to sort the arrow pixels"""
-        pass
+        """
+        Simple pixel sort.
+        Sorts pixels by column in all arrows.
+        :return:
+        """
+        self.pixels.sort(key=lambda pixel: pixel.col)
+
 
 
 class SolidArrow(BaseArrow):
     """
-    Class used to represent simple reaction arrows.
+    Class used to represent simple solid reaction arrows.
     :param pixels: pixels forming the arrows
     :type pixels: list[Point]
     :param line: line found by Hough transform, underlying primitive,
@@ -534,10 +545,11 @@ class SolidArrow(BaseArrow):
             self.pixels.sort(key=lambda pixel: pixel.col)
 
 
-
 class CurlyArrow(BaseArrow):
 
     def __init__(self, pixels, panel, contour=None, line=None):
+        """Class used to represent curly arrows. Does not make use of the ``line`` attribute,
+        and overrides the ``initialize`` method to account for this"""
         self.contour = contour
         super().__init__(pixels, panel)
         self.line = None
@@ -552,6 +564,7 @@ class CurlyArrow(BaseArrow):
 
 
 class ResonanceArrow(BaseArrow):
+    """Class used to represent resonance arrows"""
     def __init__(self, pixels, panel, line=None, contour=None):
 
         self.line = line
@@ -567,6 +580,7 @@ class ResonanceArrow(BaseArrow):
 
 
 class EquilibriumArrow(BaseArrow):
+    """Class used to represent equilibrium arrows"""
     def __init__(self, pixels, panel, line=None, contour=None):
 
         self.line = line
@@ -594,7 +608,7 @@ class ArrowCandidate(Candidate):
 
 
 class ArrowClassifier(nn.Module):
-
+    """Simple classifier used to group alle extracted arrows into the correct classes"""
     def __init__(self):
         super().__init__()
         self.c1 = nn.Conv2d(1, 16, 3, padding='same')
@@ -629,6 +643,8 @@ class ArrowClassifier(nn.Module):
 
 
 class ArrowDetector(nn.Module):
+    """Simple classifier model used to detect arrows. Takes in image patches containing individual connected components
+    and performs a binary classification"""
     def __init__(self):
         super().__init__()
         self.c1 = nn.Conv2d(1, 32, 3, padding='same', )
