@@ -37,18 +37,18 @@ cfg.MODEL.DEVICE = 'cpu'
 class UnifiedExtractor(BaseExtractor):
     """The main object detection model. Combines an underlying detectron2 object detection model, as well
     as the individual diagram, label and conditions extractors"""
-    def __init__(self, fig, all_arrows, use_tiler=True):
+    def __init__(self, fig, arrows, use_tiler=True):
         """
         :param fig: Analysed figure
         :type fig: Figure
-        :param all_arrows: all extracted arrows from the arrow extractor model
-        :type all_arrows: list[BaseArrow]
+        :param arrows: all extracted arrows from the arrow extractor model
+        :type arrows: list[BaseArrow]
         :param use_tiler: Whether to perform small object detection on image patches
         :type use_tiler: bool
         """
         super().__init__(fig)
         self.model = Detectron2Adapter(fig, use_tiler)
-        self._all_arrows = all_arrows
+        self._arrows = arrows
         self.diagram_extractor = DiagramExtractor(self.fig, diag_priors=None, arrows=self.all_arrows)
         self.label_extractor = LabelExtractor(self.fig, priors=None)
         self.conditions_extractor = ConditionsExtractor(self.fig, priors=None)
@@ -66,11 +66,11 @@ class UnifiedExtractor(BaseExtractor):
 
     @property
     def all_arrows(self):
-        return self._all_arrows
+        return self._arrows
 
     @all_arrows.setter
     def all_arrows(self, val):
-        self._all_arrows = val
+        self._arrows = val
         self.diagram_extractor._arrows = val
 
     @property

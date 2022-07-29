@@ -23,19 +23,33 @@ from processors import ImageReader, ImageScaler, ImageNormaliser, Binariser
 
 
 class SchemeExtractor(BaseExtractor):
+    """The main, high-level scheme extraction class. Can be used for extracting from single images, or from directories.
+    The extraction should be run from the command line using extract.py using the arguments listed there """
 
     def __init__(self, opts):
+        """
+        :param opts: options from the command line
+        :type opts: argparse.Namespace
+        """
         self.opts = opts
         self.path = Path(opts.path)
         self.arrow_extractor = ArrowExtractor(fig=None)
-        self.unified_extractor = UnifiedExtractor(fig=None, all_arrows=None, use_tiler=self.opts.finegrained_search)
+        self.unified_extractor = UnifiedExtractor(fig=None, arrows=[], use_tiler=self.opts.finegrained_search)
         self._extract_single_image = False if self.path.is_dir() else True
+        self.scheme = None
+
+    @property
+    def extracted(self):
+        return self.scheme
 
     def extract(self):
+        """The main extraction method. Allows extraction from single image or a directory using a single interface. """
         if not self._extract_single_image:
             return self.extract_from_dir()
         else:
-            self.extract_from_image(self.path)
+            scheme = self.extract_from_image(self.path)
+            self.scheme = scheme
+            return scheme
 
     def plot_extracted(self, ax=None):
         """Currently plotting is supported only for single-image extraction"""
@@ -47,17 +61,20 @@ class SchemeExtractor(BaseExtractor):
         plt.show()
 
     def extract_from_image(self, path):
-        """Main extraction method used for extracting data from a single image"""
+        """Main extraction method used for extracting data from a single image. Returns the parsed Scheme object.
+        If an output directory is provided in the arguments' list, then the output is also saved there.
+
+        :param path: path to an image
+        :type path: Path
+        :return: parsed reaction scheme
+        :rtype: ReactionScheme
+        """
         reader = ImageReader(str(path), color_mode=ImageReader.COLOR_MODE.GRAY)
         fig = reader.process()
-        # orig_fig = deepcopy(fig)
         scaler = ImageScaler(fig, resize_min_dim_to=1024, enabled=True)
-        # scaler = ImageScaler(fig, resize_max_dim_to=1024, enabled=True)
         fig = scaler.process()
         normaliser = ImageNormaliser(fig)
         fig = normaliser.process()
-
-
 
         binarizer = Binariser(fig)
         fig = binarizer.process()
@@ -67,17 +84,11 @@ class SchemeExtractor(BaseExtractor):
         print(fig.img)
         estimate_single_bond(fig)
 
-
         solid_arrows, eq_arrows, res_arrows, curly_arrows = self.arrow_extractor.extract()
         arrows = solid_arrows + eq_arrows + res_arrows + curly_arrows
-        # import matplotlib.pyplot as plt
-        # f, ax = plt.subplots(figsize=(20, 20))
-        #
-        # ax.imshow(fig.img, cmap=plt.cm.binary)
-        # arrow_extractor.plot_extracted(ax)
 
         all_arrows = solid_arrows + eq_arrows + res_arrows + curly_arrows
-        # unified_extractor = UnifiedExtractor(fig, all_arrows, use_tiler=self.opts.finegrained_search)
+        # unified_extractor = UnifiedExtractor(fig, arrows, use_tiler=self.opts.finegrained_search)
         self.unified_extractor.all_arrows = all_arrows
         diags, conditions, labels = self.unified_extractor.extract()
         if self.opts.visualize:
@@ -114,7 +125,13 @@ class SchemeExtractor(BaseExtractor):
         return schemes
 
     def save_scheme_to_disk(self, scheme, image_path):
-        """Writes the reconstructed scheme to disk"""
+        """Writes the reconstructed scheme to disk
+        :param scheme: Reconstructed scheme object
+        :type scheme: ReactionScheme
+        :param image_path: path to the input image from which the scheme was extracted
+        :type image_path: Path
+        :return: None
+        """
         out_name = Path(f'{image_path.stem}.json')
         outpath = self.opts.output_dir / out_name
         with open(outpath, 'w') as outfile:

@@ -3,14 +3,12 @@
 Extract
 =======
 
-Main extraction routines.
+Main extraction routine. Run from the command line to start extraction.
 
 author: Damian Wilary
 email: dmw51@cam.ac.uk
 
 """
-
-
 
 from __future__ import absolute_import
 from __future__ import division
@@ -34,13 +32,10 @@ parser = argparse.ArgumentParser()
 
 parser.add_argument('--path', type=str, required=True, help='Path to a single image or to a directory with images to extract' )
 parser.add_argument('--finegrained_search', action='store_true')
-
 parser.add_argument('--output_dir', type=str)
 parser.add_argument('--visualize', action='store_true')
 
 opts = parser.parse_args()
-# if opts.save_output and not opts.output_dir:
-#     parser.error('Output directory path must be provided to save the output')
 
 if __name__ == '__main__':
     extractor = SchemeExtractor(opts)

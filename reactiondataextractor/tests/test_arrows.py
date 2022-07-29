@@ -5,11 +5,11 @@ from reactiondataextractor.actions import estimate_single_bond
 from reactiondataextractor.extractors.arrows import SolidArrowCandidateExtractor, CurlyArrowCandidateExtractor, ArrowExtractor
 from reactiondataextractor.models.segments import Panel, Point
 # from models.utils import imread
-from reactiondataextractor.processors import ImageReader, EdgeExtractor
+from reactiondataextractor.processors import ImageReader, Binariser
 PATH_SOLID = 'test_images/rde_test.png'
 reader = ImageReader(PATH_SOLID, ImageReader.COLOR_MODE.GRAY)
 solid_fig = reader.process()
-binarizer = EdgeExtractor(solid_fig)
+binarizer = Binariser(solid_fig)
 solid_fig = binarizer.process()
 
 # solid_fig = imread('rde_test.png')
@@ -22,7 +22,7 @@ solid_arrows = extractor.extract()
 PATH_CURLY = 'test_images/rde_test_curly.gif'
 reader = ImageReader(PATH_CURLY, ImageReader.COLOR_MODE.GRAY)
 curly_fig = reader.process()
-binarizer = EdgeExtractor(curly_fig)
+binarizer = Binariser(curly_fig)
 curly_fig = binarizer.process()
 
 curly_extractor = CurlyArrowCandidateExtractor(curly_fig)
