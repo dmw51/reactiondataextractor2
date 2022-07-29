@@ -16,20 +16,17 @@ Beard (ejb207@cam.ac.uk)
 import csv
 import logging
 from copy import deepcopy
-
 from matplotlib.patches import Rectangle
 import os
 import re
 from urllib.error import URLError
 
-# from chemdataextractor.doc.text import Token
 import cirpy
 
 from reactiondataextractor.models.base import BaseExtractor
 from reactiondataextractor.models.reaction import Label
 from reactiondataextractor.ocr import ASSIGNMENT, SEPARATORS, CONCENTRATION, LABEL_WHITELIST, img_to_text
-# from ..utils.processing import dilate_fragments
-# from .. import settings
+
 
 log = logging.getLogger('extract.labels')
 
@@ -51,16 +48,8 @@ spelling_file = os.path.join(parent_dir, '..', 'dict', 'spelling.txt')
 
 
 class LabelExtractor(BaseExtractor):
-    """This class is responsible for finding labels and assigning them to appropriate chemical diagrams. As opposed to
-        other extractors, this gives diagrams with appropriately assigned labels"""
+    """This class is responsible for extracting information from detected labels"""
 
-    # def __init__(self, processed_fig, react_prods_structures, conditions_structures, confidence_thresh=0.5):
-    #     self.fig = processed_fig
-    #     self.react_prods_structures = react_prods_structures
-    #     self.conditions_structures = conditions_structures
-    #     self._dilated_fig = self._dilate_fig()
-    #     self.confidence_threshold = confidence_thresh
-    #     self._extracted = None
     def __init__(self, fig, priors):
         super().__init__(fig)
         self.priors = priors
@@ -68,16 +57,9 @@ class LabelExtractor(BaseExtractor):
     def extract(self):
         """Main extraction method"""
         labels = [self.read_label(cand) for cand in self.priors]
-        for cand_region, label in zip(self.priors, deepcopy(labels)):
-            if len(label.text) == 1 and label.text[0] == '+':  # Filter out solitary plus signs
-                labels.remove(label)
-
-        # diagrams = [Diagram(panel=structure, label=self.find_label(structure), crop=Crop(self.fig, structure))
-        #             for structure in self.react_prods_structures]
-        # diagrams_conditions = [Diagram(panel=structure, label=None, crop=Crop(self.fig, structure))
-        #                        for structure in self.conditions_structures]
-        # all_diagrams = diagrams + diagrams_conditions
-        # all_diagrams = self.resolve_labels(all_diagrams)
+        # for cand_region, label in zip(self.priors, deepcopy(labels)):
+        #     if len(label.text) == 1 and label.text[0] == '+':  # Filter out solitary plus signs
+        #         labels.remove(label)
         self._extracted = labels
         return self.extracted
 

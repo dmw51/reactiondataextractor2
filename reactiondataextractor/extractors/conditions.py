@@ -20,15 +20,6 @@ import logging
 from matplotlib.patches import Rectangle
 import re
 
-# from chemdataextractor.doc import Span
-# from chemdataextractor.nlp.tokenize import ChemWordTokenizer
-
-# from ..actions import find_nearby_ccs, extend_line
-# from ..models import Conditions, SolidArrow, BaseExtractor, Figure, TextLine, Crop, FigureRoleEnum, ReactionRoleEnum, Panel
-# from ..models.utils import Point, Line, DisabledNegativeIndices
-# from ..ocr import read_conditions
-# from ..utils.processing import find_minima_between_peaks, erase_elements
-# from .. import settings
 from configs.config import ExtractorConfig
 from reactiondataextractor.models.base import BaseExtractor, TextRegion
 from reactiondataextractor.models.segments import FigureRoleEnum
@@ -42,31 +33,44 @@ SPECIES_FILE = ExtractorConfig.CONDITIONS_SPECIES_PATH
 
 class ConditionsExtractor(BaseExtractor):
     """Main class for extracting reaction conditions from images. Takes in the bounding panels of recognised regions,
-    recognises text and parses the data
-
-    :param fig: main figure
-    :type fig: Figure
-    :param priors: Bounding panels of regions recognised as conditions
-    :type priors: list[Panel]
+    recognises text and parses the data.
     """
 
     def __init__(self, fig, priors):
+        """
+        :param fig: main figure
+        :type fig: Figure
+        :param priors: Bounding panels of regions recognised as conditions
+        :type priors: list[Panel]
+        """
         super().__init__(fig)
         self.priors = priors
-        # self.arrows = arrows
         self._extracted = None
 
     def extract(self):
-        """Main extraction method"""
+        """Main extraction method.
+
+        Delegates recognition to the OCR model, then parsing to the ConditionParser class. Returns the parsed
+        Conditions.
+        :return: parsed Conditions object
+        :rtype: Conditions
+        """
         conditions, conditions_structures = [], []
         for cand in self.priors:
-            step_conditions = self.get_conditions(cand)
-            #TODO: Implement diagram handling (whether a diagram is part of the conditions region) - This should be mostly
-            #handled by the unified model; is IoU enough?
-            if step_conditions:
+            # step_conditions = self.get_conditions(cand)
+            recognised = img_to_text(self.fig, cand, whitelist=CONDITIONS_WHITELIST)
+            if recognised:
+                dct = ConditionParser(recognised).parse_conditions()
+                step_conditions = Conditions(conditions_dct=dct, **cand.pass_attributes(), text=recognised)
                 conditions.append(step_conditions)
             else:
                 conditions.append(Conditions(conditions_dct={}, panel=cand.panel))
+            # #TODO: Implement diagram handling (whether a diagram is part of the conditions region) - This should be mostly
+            # #handled by the unified model; is IoU enough?
+            # if step_conditions:
+            #     conditions.append(step_conditions)
+            # else:
+            #     conditions.append(Conditions(conditions_dct={}, panel=cand.panel))
             # conditions_structures.extend(step_structures)
         self._extracted = conditions#, conditions_structures
         return self.extracted
@@ -91,192 +95,19 @@ class ConditionsExtractor(BaseExtractor):
                                   panel.bottom - panel.top, **params)
             ax.add_patch(rect_bbox)
 
-    def get_conditions(self, candidate):
-        """
-        Recovers conditions of a single reaction step.
-
-        Analyses the region stored inside `conditions_candidate`. Passes text through an OCR engine, and parses
-        the output. Forms a Conditions object containing all the collected information.
-        :param TextCandidate candidate: A candidate object containing a relevant textual region
-        :return Conditions: Conditions object containing found information.
-        """
-        recognised = img_to_text(self.fig, candidate, whitelist=CONDITIONS_WHITELIST)
-        if recognised:
-            dct = ConditionParser(recognised).parse_conditions()
-            return Conditions(conditions_dct=dct, **candidate.pass_attributes(), text=recognised)
-        # textlines, condition_structures = self.find_step_conditions(arrow)
-        # [setattr(panel, 'role', ReactionRoleEnum.CONDITIONS) for panel in condition_structures]
-        # if textlines:
-        #     recognised = [read_conditions(self.fig, line, conf_threshold=40) for line in textlines]
-        #
-        #     recognised = [sentence for sentence in recognised if sentence]
-        #     parser = ConditionParser(recognised)
-        #     conditions_dct = parser.parse_conditions()
-        # else:
-        #     conditions_dct = {}
-        # return Conditions(textlines, conditions_dct, arrow, condition_structures), condition_structures
-
-    # def find_step_conditions(self, arrow):
+    # def get_conditions(self, candidate):
     #     """
-    #     Finds conditions of a step. Selects a region around an arrow. If the region contains text, scans the text.
-    #     Otherwise it returns None (no conditions found).
-    #     :param Arrow arrow: Arrow around which the conditions are to be looked for
-    #     :return: Collection [Textline,...] containing characters grouped together as text lines
+    #     Recovers conditions of a single reaction step.
+    #
+    #     Analyses the region stored inside `conditions_candidate`. Passes text through an OCR engine, and parses
+    #     the output. Forms a Conditions object containing all the collected information.
+    #     :param TextCandidate candidate: A candidate object containing a relevant textual region
+    #     :return Conditions: Conditions object containing found information.
     #     """
-    #
-    #     structure_panels = [cc.parent_panel for cc in self.fig.connected_components if
-    #                         cc.role == FigureRoleEnum.STRUCTUREBACKBONE
-    #                         and cc.parent_panel]
-    #     conditions_panels = [panel for panel in structure_panels if ConditionsExtractor.belongs_to_conditions(panel,
-    #                                                                                                           arrow)]
-    #
-    #     text_lines = self.mark_text_lines(arrow, conditions_panels)
-    #
-    #     for text_line in text_lines:
-    #         self.collect_characters(text_line)
-    #     text_lines = [text_line for text_line in text_lines if text_line.connected_components]
-    #
-    #     return text_lines, conditions_panels
-
-    # def mark_text_lines(self, arrow, conditions_panels):
-    #     """
-    #     Isolates conditions around around ``arrow`` in ``fig``.
-    #
-    #     Marks text lines first by finding obvious conditions' text characters around an arrow.
-    #     This scan is also performed around `conditions_panels` if any. Using the found ccs, text lines are fitted
-    #     with kernel density estimates.
-    #     :param SolidArrow arrow: arrow around which the region of interest is centered
-    #     :param [Panel,...] conditions_panels: iterable of panels containing connected components representing conditions
-    #     :return: Crop: Figure-like object containing the relevant crop with the arrow removed
-    #     """
-    #     fig = self.fig
-    #     average_height = np.median([cc.height for cc in fig.connected_components])
-    #
-    #     areas = [cc.area for cc in fig.connected_components]
-    #     areas.sort()
-    #     def condition1(cc): return cc.role != FigureRoleEnum.STRUCTUREAUXILIARY
-    #     if arrow.is_vertical:
-    #         def condition2(cc): return cc.top > arrow.top and cc.bottom < arrow.bottom
-    #     else:
-    #         def condition2(cc): return cc.left > arrow.left and cc.right < arrow.right
-    #
-    #     condition = condition1 and condition2
-    #     middle_pixel = arrow.center_px
-    #     def distance_fn(cc): return 2.2 * cc.height
-    #     core_ccs = find_nearby_ccs(middle_pixel, fig.connected_components, (3 * average_height, distance_fn),
-    #                                condition=condition)
-    #     if not core_ccs:
-    #         for pixel in arrow.pixels[::10]:
-    #             core_ccs = find_nearby_ccs(pixel, fig.connected_components, (2 * average_height, distance_fn),
-    #                                        condition=condition)
-    #             if len(core_ccs) > 1:
-    #                 break
-    #         else:
-    #             log.warning('No conditions were found in the initial scan. Aborting conditions search...')
-    #             return []
-    #
-    #     if conditions_panels:
-    #         for panel in conditions_panels:
-    #             core_ccs += find_nearby_ccs(panel, fig.connected_components, (3 * average_height, distance_fn),
-    #                                         condition=condition)
-    #
-    #     conditions_region = Panel.create_megarect(core_ccs)
-    #
-    #     cropped_region = Crop(erase_elements(fig, conditions_panels), conditions_region)  # Do not look at structures
-    #
-    #     text_lines = [TextLine(None, None, top, bottom, crop=cropped_region, anchor=anchor) for (top, bottom, anchor) in
-    #                   self.identify_text_lines(cropped_region)]
-    #
-    #     text_lines = [text_line.in_main_figure for text_line in text_lines]
-    #
-    #     return text_lines
-    #
-    # def identify_text_lines(self, crop):
-    #     """Fits text lines of conditions text using kernel density estimation.
-    #
-    #     Fits kernel density estimate to bottom boundaries of the relevant panels. Bottom text lines are found as the
-    #     maxima of the estimate subject to a condition that the text lines must be separated by appropriate distance.
-    #     The estimate is then chopped into region based on the deepest minima between peaks and characters assigned to
-    #     these regions. Groups of characters are then used to estimate the top boundary of each text line. Each text line
-    #     is finally associated with an anchor - one of its characters - to situate it in the main image.
-    #     :param Crop crop: cropped region of interest containing the reaction conditions
-    #     :return: iterable of tuples (top boundary, bottom boundary, anchor)
-    #     :rtype: list
-    #     """
-    #     ccs = [cc for cc in crop.connected_components if cc.role != FigureRoleEnum.ARROW]  # filter out arrows
-    #
-    #     if len(ccs) == 1:  # Special case
-    #         only_cc = ccs[0]
-    #         anchor = Point(only_cc.center[1], only_cc.center[0])
-    #         return [(only_cc.top, only_cc.bottom, anchor)]
-    #     if len(ccs) > 10:
-    #         ccs = [cc for cc in ccs if
-    #                cc.area > np.percentile([cc.area for cc in ccs], 0.2)]  # filter out all small ccs (e.g. dots)
-    #
-    #     img = crop.img
-    #     bottom_boundaries = [cc.bottom for cc in ccs]
-    #     bottom_boundaries.sort()
-    #
-    #     bottom_count = Counter(bottom_boundaries)
-    #     bottom_boundaries = np.array([item for item in bottom_count.elements()]).reshape(-1, 1)
-    #
-    #     little_data = len(ccs) < 10
-    #     grid = GridSearchCV(KernelDensity(),
-    #                         {'bandwidth': np.linspace(0.005, 2.0, 100)},
-    #                         cv=(len(bottom_boundaries) if little_data else 10))  # 10-fold cross-validation
-    #     grid.fit(bottom_boundaries)
-    #     best_bw = grid.best_params_['bandwidth']
-    #     kde = KernelDensity(bandwidth=best_bw, kernel='exponential')
-    #     kde.fit(bottom_boundaries)
-    #     # print(f'params: {kde.get_params()}')
-    #     rows = np.linspace(0, img.shape[0] + 20, img.shape[0] + 21)
-    #     logp_bottom = kde.score_samples(rows.reshape(-1, 1))
-    #
-    #     heights = [cc.bottom - cc.top for cc in ccs]
-    #     mean_height = np.mean(heights, dtype=np.uint32)
-    #     bottom_lines, _ = find_peaks(logp_bottom, distance=mean_height * 1.2)
-    #     data = np.array([rows, logp_bottom])
-    #     bottom_lines.sort()
-    #
-    #     bucket_limits = find_minima_between_peaks(data, bottom_lines)
-    #     buckets = np.split(rows, bucket_limits)
-    #     bucketed_chars = [[cc for cc in ccs if cc.bottom in bucket] for bucket in buckets]
-    #     top_lines = [np.mean([cc.top for cc in bucket], dtype=int) for bucket in bucketed_chars]
-    #     anchors = [sorted([cc for cc in bucket], key=lambda cc: cc.area)[-1].center for bucket in bucketed_chars]
-    #     anchors = [Point(row=anchor[1], col=anchor[0]) for anchor in anchors]
-    #
-    #     return [line for line in zip(top_lines, bottom_lines, anchors)]
-    #
-    # def collect_characters(self, text_line):
-    #     """
-    #     Accurately assigns relevant characters in ``fig`` to ``text_line``
-    #
-    #     Uses a proximity search algorithm to carefully assign characters to each text line. Characters are assigned
-    #     based on mutual distance as well as horizontal displacements from the middle of text line and from the
-    #     bottom of the line and panel height.
-    #     :param TextLine text_line: found text line object
-    #     :return: None (mutates connected components assigned to a text line)
-    #     :rtype: None
-    #     """
-    #     relevant_ccs = [cc for cc in self.fig.connected_components if cc.role != FigureRoleEnum.ARROW]
-    #     initial_distance = np.sqrt(np.mean([cc.area for cc in relevant_ccs]))
-    #     distance_fn = settings.DISTANCE_FN_CHARS
-    #
-    #     def proximity_coeff(cc): return .75 if cc.area < np.percentile([cc.area for cc in relevant_ccs], 65) else .4
-    #     def condition1(cc): return (
-    #                 abs(text_line.panel.center[1] - cc.center[1]) < proximity_coeff(cc) * text_line.panel.height)
-    #
-    #     def condition2(cc): return cc.height < text_line.panel.height * 1.7
-    #     def condition3(cc): return abs(text_line.panel.bottom - cc.bottom) < 0.65 * text_line.panel.height
-    #     def condition(cc): return condition1(cc) and condition2(cc) and condition3(cc)
-    #     # First condition is proximity of panel center to center of text line measured vertically.
-    #     # Second is that height is comparable to text_line.
-    #     # Third is that the base of each letter is close to the bottom text line
-    #
-    #     found_ccs = find_nearby_ccs(text_line.anchor, relevant_ccs, (initial_distance, distance_fn),
-    #                                 FigureRoleEnum.CONDITIONSCHAR, condition)
-    #     if found_ccs:
-    #         text_line.connected_components = found_ccs
+    #     recognised = img_to_text(self.fig, candidate, whitelist=CONDITIONS_WHITELIST)
+    #     if recognised:
+    #         dct = ConditionParser(recognised).parse_conditions()
+    #         return Conditions(conditions_dct=dct, **candidate.pass_attributes(), text=recognised)
 
     def add_diags_to_dicts(self, diags):
         """Adds SMILES representations of diagrams that had been assigned to conditions regions
@@ -295,43 +126,6 @@ class ConditionsExtractor(BaseExtractor):
                 except KeyError:
                     step_conditions.conditions_dct['other species'] = [diag.smiles for diag in cond_diags if
                                                                        diag.smiles]
-
-    # @staticmethod
-    # def belongs_to_conditions(structure_panel, conditions_region):
-    #     """
-    #     Checks if a structure is part of the conditions
-    #
-    #     Looks if the ``structure_panel`` lies close to the conditions region.
-    #     Either the panel should overlap significantly with the conditions region or it should be closer  to
-    #     Two points equidistant to the arrow are chosen and the distance from these is compared to two extreme
-    #     points of an arrow. If the centre is closer to either of the two points
-    #     (subject to a maximum threshold distance) than to either of the extremes, the structure is deemed to be
-    #     part of the conditions region.
-    #
-    #     :param Panel structure_panel: Panel object marking a structure (superatoms included)
-    #     :param Arrow arrow: Arrow defining the conditions region
-    #     :return: bool True if within the conditions region else close
-    #     """
-    #
-    #     pixels = arrow.pixels
-    #     react_endpoint = pixels[0]
-    #     prod_endpoint = pixels[-1]
-    #     midpoint = pixels[len(pixels) // 2]
-    #     parallel_line_dummy = Line([midpoint])
-    #
-    #     slope = arrow.line.slope
-    #     parallel_line_dummy.slope = -1 / slope if abs(slope) > 0.05 else np.inf
-    #     parallel_1, parallel_2 = extend_line(parallel_line_dummy,
-    #                                          extension=react_endpoint.separation(prod_endpoint) // 2)
-    #
-    #     closest = min([parallel_1, parallel_2, react_endpoint, prod_endpoint],
-    #                   key=lambda point: structure_panel.separation(point))
-    #
-    #     if closest in [parallel_1, parallel_2] and structure_panel.separation(arrow.panel) < 1.0 * np.sqrt(
-    #             structure_panel.area):
-    #         return True
-    #     else:
-    #         return False
 
 
 class ConditionParser:

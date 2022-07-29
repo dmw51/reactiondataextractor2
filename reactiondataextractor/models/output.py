@@ -12,7 +12,6 @@ email: dmw51@cam.ac.uk
 import copy
 from abc import ABC, abstractmethod
 from collections import Counter
-
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
@@ -23,24 +22,22 @@ from sklearn.cluster import DBSCAN
 from reactiondataextractor.models.geometry import Line
 from reactiondataextractor.models.reaction import Diagram, ReactionStep
 from reactiondataextractor.models.segments import ReactionRoleEnum
-
 from configs.config import SchemeConfig
 from reactiondataextractor.utils import find_points_on_line, euclidean_distance
 
 
 class Graph(ABC):
-    """
-    Generic directed graph class
-
-    :param graph_dict: underlying graph mapping
-    :type graph_dict: dict
+    """Generic directed graph class
     """
 
     def __init__(self):
+        """:param nodes: a mapping from node index to contents of the node
+        :type graph_dict: dict
+        :param adjacency: a dict with a key for each node index with outgoing connections and a value specifying all connections from this node
+        :param adjacency: dict"""
         self.nodes = {}
         self.adjacency = {}
         self._node_idx = 0
-
 
     @abstractmethod
     def _generate_edge(self, *args):
@@ -73,10 +70,16 @@ class Graph(ABC):
         Returns all isolated vertices. Can be used for output validation
         :return: collection of isolated (unconnected) vertices
         """
-        graph = self._graph_dict
-        return [key for key in graph if graph[key] == []]
+        nodes_indices = set(self.nodes.keys())
+
+        # Isolated means no outgoing edges and no incoming edges
+        no_out_nodes = set(nodes_indices.difference(set(self.adjacency.keys())))
+        all_incoming_connections = set([v for connections in self.adjacency.values() for v in connections])
+        unconnected = no_out_nodes.difference(all_incoming_connections)
+        return unconnected
 
     def find_path(self, node1, node2, path=None):
+        #TODO: Refactor this to match the new graph definition
         if path is None:
             path = []
         path += [node1]
@@ -92,33 +95,21 @@ class Graph(ABC):
 
 class ReactionScheme(Graph):
     """Main class used for representing the output of an extraction process
-
-    :param arrows: all extracted reaction arrows
-    :type arrows: list[BaseArrow]
-    :param diags: all extracted chemical diagrams
-    :type diags: list[Diagram]
-    :param fig: Analysed figure
-    :type fig: Figure"""
+    """
     def __init__(self, fig, reaction_steps):
-        # self._conditions = arrows
-        # self._diags = diags
+        """param fig: Analysed figure
+        :type fig: Figure
+        :param reaction_steps: all found reaction steps
+        :type reaction_steps: list[ReactionStep]"""
         super().__init__()
         self._reaction_steps = reaction_steps
-        # self._pretty_reaction_steps = PrettyList(self._reaction_steps)
         self.create_graph()
-        self._start = None  # start node(s) in a graph
-        self._end = None   # end node(s) in a graph
+        # self._start = None  # start node(s) in a graph
+        # self._end = None   # end node(s) in a graph
         self._fig = fig
-        # self.set_start_end_nodes()
-
-        # self._single_path = True if len(self._start) == 1 and len(self._end) == 1 else False
 
     def edges(self):
         return self.adjacency
-    #     if not self._graph_dict:
-    #         self.create_graph()
-    #
-    #     return {k: v for k, v in self._graph_dict.items()}
 
     def _generate_edge(self, key, successor):
         key = self.nodes[frozenset(key)]
@@ -129,16 +120,10 @@ class ReactionScheme(Graph):
         else:
             self.adjacency[key] = [successor]
 
-        # self._graph_dict[key].append(successor)
-
     def __repr__(self):
         return f'ReactionScheme({self._reaction_steps})'
 
     def __str__(self):
-        # if self._single_path:
-        #     path = self.find_path(self.reactants, self.products)
-        #     return '  --->  '.join((' + '.join(str(species) for species in group)) for group in path)
-        # else:
         return '\n'.join([str(reaction_step) for reaction_step in self._reaction_steps])
 
     def __iter__(self):
@@ -384,97 +369,59 @@ class ReactionScheme(Graph):
 
         # return smirks, [node.conditions_dct for node in graph if isinstance(node, Conditions)]
 
-    # def _scan_form_reaction_step(self, arrow):
-    #     """
-    #     Scans an image around a single arrow to give reactants and products in a single reaction step
-    #     :param BaseArrow arrow: BaseArrow object or a child class instance around which the scan is performed
-    #     :return: arrows and diagrams packed inside a reaction step
-    #     :rtype: ReactionStep
-    #     """
-    #     # arrow = step_conditions.arrow
-    #     diags = self._diags
+    # def separate_ccs(self, ccs, point1, point2):
+    #     """Separates Panel objects in `ccs` into two groups based on proximity to one of the two points `point1` and
+    #     `point2. Distance between each point and the closest edge or corner of a panel is used (this normalises size
+    #     of each panel)."""
+    #     pts = [point1, point2]
+    #     clusters = [[], []]
+    #     for cc in ccs:
+    #         dists = [(idx, cc.edge_separation(pts[idx])) for idx in range(2)]
+    #         min_idx = min(dists, key=lambda x: x[1])[0]
+    #         clusters[min_idx].append(cc)
+    #     if any(c == [] for c in clusters):  # no reactants or products found
+    #         pass
+    #         # Come up with a solution - when such a situation happens? Anything other than when a scheme continues
+    #         # in the next line? Could use old version for this
     #
-    #     # endpoint1, endpoint2 = extend_line(step_conditions.arrow.line,
-    #     #                                    extension=arrow.pixels[0].separation(arrow.pixels[-1]) * 0.75)
-    #     # react_side_point = step_conditions.arrow.react_side[0]
-    #     # endpoint1_close_to_react_side = endpoint1.separation(react_side_point) < endpoint2.separation(react_side_point)
-    #     # if endpoint1_close_to_react_side:
-    #     #     react_endpoint, prod_endpoint = endpoint1, endpoint2
-    #     # else:
-    #     #     react_endpoint, prod_endpoint = endpoint2, endpoint1
-    #
-    #     react_endpoint, prod_endpoint = arrow.center, arrow.reference_pt
-    #
-    #     initial_distance = SchemeConfig.SEARCH_DISTANCE_FACTOR * np.sqrt(np.mean([panel.area for panel in diags]))
-    #     # extended_distance = 4 * np.sqrt(np.mean([diag.panel.area for diag in diags]))
-    #     extended_distance = initial_distance * 2
-    #     distance_fn = lambda panel: initial_distance
-    #     distances = initial_distance, distance_fn
-    #     extended_distances = extended_distance, distance_fn
-    #     nearby_diags = find_nearby_ccs(arrow.panel, diags, distances)
-    #
-    #     # reactants = find_nearby_ccs(react_endpoint, diags, distances,
-    #     #                             condition=lambda diag: diag.panel.role != ReactionRoleEnum.CONDITIONS)
-    #     reactants, products = self.separate_ccs(nearby_diags, react_endpoint, prod_endpoint)
-    #     # if not reactants:
-    #     #     reactants = find_nearby_ccs(react_endpoint, diags, extended_distances,
-    #     #                                 condition=lambda diag: diag.panel.role != ReactionRoleEnum.CONDITIONS)
-    #     # if not reactants:
-    #     #     reactants = self._search_elsewhere('up-right', step_conditions.arrow, distances)
-    #     #
-    #     # products = find_nearby_ccs(prod_endpoint, diags, distances,
-    #     #                            condition=lambda diag: diag.panel.role != ReactionRoleEnum.CONDITIONS)
-    #     # #
-    #     # if not products:
-    #     #     products = find_nearby_ccs(prod_endpoint, diags, extended_distances,
-    #     #                                condition=lambda diag: diag.panel.role != ReactionRoleEnum.CONDITIONS)
-    #     #
-    #     # if not products:
-    #     #     products = self._search_elsewhere('down-left', step_conditions.arrow, distances)
-    #     #
-    #     [setattr(reactant, 'role', ReactionRoleEnum.STEP_REACTANT) for reactant in reactants]
-    #     [setattr(product, 'role', ReactionRoleEnum.STEP_PRODUCT) for product in products]
-    #
-    #     return ReactionStep(reactants, products, conditions=arrow.conditions)
-
-    def separate_ccs(self, ccs, point1, point2):
-        """Separates Panel objects in `ccs` into two groups based on proximity to one of the two points `point1` and
-        `point2. Distance between each point and the closest edge or corner of a panel is used (this normalises size
-        of each panel)."""
-        pts = [point1, point2]
-        clusters = [[], []]
-        for cc in ccs:
-            dists = [(idx, cc.edge_separation(pts[idx])) for idx in range(2)]
-            min_idx = min(dists, key=lambda x: x[1])[0]
-            clusters[min_idx].append(cc)
-        if any(c == [] for c in clusters):  # no reactants or products found
-            pass
-            # Come up with a solution - when such a situation happens? Anything other than when a scheme continues
-            # in the next line? Could use old version for this
-
-        return clusters
-
-
-
+    #     return clusters
 
 
 class RoleProbe:
     """This is a class used to probe reaction schemes around arrows to assign roles to diagrams and reconstruct
-    the reaction in a machine-readable format"""
+    the reaction in a machine-readable format. This class reconstructs individual reaction steps which are then passed
+    to the ReactionScheme class"""
 
     def __init__(self, fig, arrows, diagrams):
+        """:param fig: Analysed figure
+        :type fig: Figure
+        :param arrows: all extracted arrows
+        :type arrows: list[BaseArrow]
+        :param diagrams: all found diagrams
+        :type diagrams: list[Diagram]
+        """
         self.fig = fig
         self.arrows = arrows
         self.diagrams = diagrams
+
         self.stepsize = min([x for diag in self.diagrams for x in (diag.panel.width, diag.panel.height)]) #Step size should be related to width/height of the smallest diagram, whichever is smaller
         # Could also be a function depending on arrow direction, but might not be necessary
         self.segment_length = np.mean([(d.panel.width + d.panel.height) / 2 for d in self.diagrams]) // 2
-        self.reaction_steps = []
         # This should be comparable to the largest dim of the largest diagrams, but might not be
                                 # stable to outliers
-
+        self.reaction_steps = []
 
     def probe_around_arrow(self, arrow):
+        """Main probing method.
+
+        Establishes the direction of an arrow and probes its surroundings. Performs linear scanning in the two regions
+        corresponding to step reactants and products to gather them. If one group is not found, assumes a step
+        spread over multiple lines and performs the scanning accordingly. Finally, finds which region corresponds to
+        reactants and which to products.
+        :param arrow: arrow around which the probing is performed
+        :type arrow: BaseArrow
+        :return: an object containing step reactants, products, and the arrow
+        :rtype: ReactionStep"""
         # center, direction_normal = self.find_normal_to_arrow(arrow)
         # center = np.asarray(center)
         x_one, y_one = arrow.center
@@ -488,15 +435,12 @@ class RoleProbe:
         diags_two = self._perform_line_scan(arrow, regions_two_dims, arrow.center, direction, direction_normal,
                                             switch=+1)
 
-
-        # diags_one = self._probe_around_arrow(arrow, region_one_dims, switch=-1)
-        # diags_two = self._probe_around_arrow(arrow, regions_two_dims, switch=+1)
         if diags_one and diags_two:
             single_line = True
         else: ### If no diags were found on one side of an arrow, assume, they can be
             # found in the previous or next row of the reaction
             # Check whether the arrow is at the beginning or end of a given line
-            closer_extreme = min([0, self.fig.img.shape[1]], key= lambda coord: (arrow.panel.center[0] - coord)**2)
+            closer_extreme = min([0, self.fig.img.shape[1]], key=lambda coord: (arrow.panel.center[0] - coord)**2)
             search_direction = 'up-right' if closer_extreme == 0 else 'down-left'
             diags_one = diags_one if diags_one else self._search_elsewhere(where=search_direction, arrow=arrow,
                                                                            direction=direction, direction_normal=direction_normal,
@@ -509,10 +453,18 @@ class RoleProbe:
         diags_react, diags_prod = self.assign_diags(diags_one, diags_two, arrow)
         self.reaction_steps.append(ReactionStep(arrow, reactants=diags_react, products=diags_prod, single_line=single_line))
 
-        # return diags_one, diags_two
-
-
     def assign_diags(self, group1, group2, arrow):
+        """Assigns the two groups as either reactants or products based on their proximity to the arrow centre
+        vs. their proximity to arrow's centre of mass.
+
+        :param group1: a group of diagrams
+        :type group1: list[Diagram]
+        :param group2: a group of diagrams
+        :type group2: list[Diagram]
+        :param arrow: arrow with respect to which the groups are analysed
+        :type arrow: BaseArrow
+        :return: the same groups classified as either reactants or products
+        :rtype: tuple[list[Diagram]]"""
         ref_point = arrow.reference_pt # arrow's center of mass which denoted the products' side
         groups = [group1, group2]
 
@@ -525,174 +477,92 @@ class RoleProbe:
         react_group = groups[0]
         return react_group, prod_group
 
-    def resolve_nodes(self):
-        # """Looks for inconsistent diagram nodes and fixes them.
-        #
-        #  Diagram nodes are symmetric in that if diagrams take part in an intermediate step, all constructed nodes
-        #  associated with this group should contain the same number of diagrams. If something goes wrong, we choose a
-        #  minimal node to replace all the nodes associated with this diagram group. A minimal node is defined
-        #  as a list of diagrams of smallest length common to a group of nodes. For example, if three nodes contain diagrams
-        #  [A, B], [A,B] and [A, B, C], we choose [A, B] as the minimal node and replace the three nodes as [A,B] thus
-        #  fixing the third node"""
-        # nodes = [(node, step_idx) for (step_idx, step) in enumerate(self.reaction_steps) for node in (step.nodes[0], step.nodes[2])]
-        # getter = itemgetter(0)
-        # not_yet_grouped = set(list(range(len(nodes))))
-        # groups = []
-        # idx1 = 0
-        # while idx1 <= len(nodes) - 1:
-        #     if idx1 not in not_yet_grouped:
-        #         idx1 += 1
-        #         continue
-        #     group = [nodes[idx1]]
-        #     not_yet_grouped.remove(idx1)
-        #     for idx2 in range(len(nodes)):
-        #         node_intersection = set(getter(nodes[idx1])).intersection(set(getter(nodes[idx2])))
-        #         if idx2 in not_yet_grouped and node_intersection:
-        #             group.append(nodes[idx2])
-        #             not_yet_grouped.remove(idx2)
-        #     groups.append(group)
-        #     idx1 += 1
-        #
-        # for group in groups:
-        #     if len(group) > 2:
-        #         min_node = min(group, key=len)
-        #         min_node, idx = min_node
-        #         for node, step_idx in group:
-        #             step = self.reaction_steps[step_idx]
-        #             for step_node in step.nodes:
-        #                 if set(step_node).intersection(set(min_node)):
-        #                     step_node = min_node
-        # return groups
+    # def resolve_nodes(self):
+    #     # """Looks for inconsistent diagram nodes and fixes them.
+    #     #
+    #     #  Diagram nodes are symmetric in that if diagrams take part in an intermediate step, all constructed nodes
+    #     #  associated with this group should contain the same number of diagrams. If something goes wrong, we choose a
+    #     #  minimal node to replace all the nodes associated with this diagram group. A minimal node is defined
+    #     #  as a list of diagrams of smallest length common to a group of nodes. For example, if three nodes contain diagrams
+    #     #  [A, B], [A,B] and [A, B, C], we choose [A, B] as the minimal node and replace the three nodes as [A,B] thus
+    #     #  fixing the third node"""
+    #     # nodes = [(node, step_idx) for (step_idx, step) in enumerate(self.reaction_steps) for node in (step.nodes[0], step.nodes[2])]
+    #     # getter = itemgetter(0)
+    #     # not_yet_grouped = set(list(range(len(nodes))))
+    #     # groups = []
+    #     # idx1 = 0
+    #     # while idx1 <= len(nodes) - 1:
+    #     #     if idx1 not in not_yet_grouped:
+    #     #         idx1 += 1
+    #     #         continue
+    #     #     group = [nodes[idx1]]
+    #     #     not_yet_grouped.remove(idx1)
+    #     #     for idx2 in range(len(nodes)):
+    #     #         node_intersection = set(getter(nodes[idx1])).intersection(set(getter(nodes[idx2])))
+    #     #         if idx2 in not_yet_grouped and node_intersection:
+    #     #             group.append(nodes[idx2])
+    #     #             not_yet_grouped.remove(idx2)
+    #     #     groups.append(group)
+    #     #     idx1 += 1
+    #     #
+    #     # for group in groups:
+    #     #     if len(group) > 2:
+    #     #         min_node = min(group, key=len)
+    #     #         min_node, idx = min_node
+    #     #         for node, step_idx in group:
+    #     #             step = self.reaction_steps[step_idx]
+    #     #             for step_node in step.nodes:
+    #     #                 if set(step_node).intersection(set(min_node)):
+    #     #                     step_node = min_node
+    #     # return groups
+    #
+    #     def compute_smallest_non_self_distance(panel1, panels):
+    #         """Computes smallest distance between panel1 and a panel inside panels, after potentially excluding
+    #         panel1 from panels"""
+    #         panels = copy.copy(panels)
+    #         if panel1 in panels:
+    #             panels.remove(panel1)
+    #
+    #         return min([panel1.edge_separation(p) for p in panels])
+    #
+    #     # for step in self.reaction_steps:
+    #     for diag in self.diagrams:
+    #         for step in diag.reaction_steps:
+    #             if not step.single_line: ## Do not use the criteria if step is spread across multiple lines
+    #                 continue
+    #
+    #             if diag in step.reactants:
+    #                 group = step.reactants
+    #             else:
+    #                 group = step.products
+    #             group_copy = group + [step.arrow]
+    #             min_dist = compute_smallest_non_self_distance(diag, group_copy)
+    #             if min_dist > SchemeConfig.MAX_GROUP_DISTANCE:
+    #                 group.remove(diag)
+    #                 diag.reaction_steps.remove(step)
+    #                 # TEST THIS - Is this working??????
+    #         # groups = [reaction_step.reactants if diag in reaction_step.reactants else reaction_step.products for
+    #         #           reaction_step in diag.reaction_steps]
+    #         # arrows = [step.arrow for step in diag.reaction_steps]
+    #         # groups = [list(g)+[a] for g,a in zip(groups, arrows)]
+    #         # min_dists = [compute_smallest_non_self_distance(diag, group ) for group in groups]
+    #         # # dists = [diag.panel.edge_separation(arrow) for arrow in arrows]
+    #         # print(min_dists)
 
-        def compute_smallest_non_self_distance(panel1, panels):
-            """Computes smallest distance between panel1 and a panel inside panels, after potentially excluding
-            panel1 from panels"""
-            panels = copy.copy(panels)
-            if panel1 in panels:
-                panels.remove(panel1)
-
-            return min([panel1.edge_separation(p) for p in panels])
-
-        # for step in self.reaction_steps:
-        for diag in self.diagrams:
-            for step in diag.reaction_steps:
-                if not step.single_line: ## Do not use the criteria if step is spread across multiple lines
-                    continue
-
-                if diag in step.reactants:
-                    group = step.reactants
-                else:
-                    group = step.products
-                group_copy = group + [step.arrow]
-                min_dist = compute_smallest_non_self_distance(diag, group_copy)
-                if min_dist > SchemeConfig.MAX_GROUP_DISTANCE:
-                    group.remove(diag)
-                    diag.reaction_steps.remove(step)
-                    # TEST THIS - Is this working??????
-            # groups = [reaction_step.reactants if diag in reaction_step.reactants else reaction_step.products for
-            #           reaction_step in diag.reaction_steps]
-            # arrows = [step.arrow for step in diag.reaction_steps]
-            # groups = [list(g)+[a] for g,a in zip(groups, arrows)]
-            # min_dists = [compute_smallest_non_self_distance(diag, group ) for group in groups]
-            # # dists = [diag.panel.edge_separation(arrow) for arrow in arrows]
-            # print(min_dists)
-
-    def visualize_steps(self):
-        canvases = [step.visualize(self.fig) for step in self.reaction_steps]
-        _Y_SEPARATION = 50
-        out_canvas_height = np.sum([c.shape[0] for c in canvases]) + _Y_SEPARATION * (len(canvases) - 1)
-        out_canvas_width = np.max([c.shape[1] for c in canvases])
-        out_canvas = np.zeros([out_canvas_height, out_canvas_width])
-        y_end = 0
-        for canvas in canvases:
-            h, w = canvas.shape
-            out_canvas[y_end:y_end+h, 0:0+w] = canvas
-            y_end += h + _Y_SEPARATION
-
-        plt.imshow(out_canvas)
-        plt.show()
-
-
-
-        # (x, y), (MA, ma), angle = cv2.fitEllipse(arrow.contour)
-        # angle = angle - 90  # Angle should be anti-clockwise relative to +ve x-axis
-        # normal_angle = angle + 90
-        # center = np.asarray([x, y])
-        # direction = np.asarray([1, np.tan(np.radians(angle))])
-        # direction_normal = np.asarray([1, np.tan(np.radians(normal_angle))])
-        #
-        # #Check both directions separately, and choose the one where image edge is reached quicker
-        # # This should be done differently, the centers should lie along the arrow line (arrow direction) and hence the
-        # # step in y direction is equal to stepsize * slope of arrow (should work in extreme cases too since we choose the lower number?)
-        # stepsize_x = self.stepsize * direction[0] ## direction[0] is set to 1 to simplify reasoning
-        # stepsize_y = self.stepsize * direction[1]
-        # num_centers_one_x = center[0] // stepsize_x
-        # num_centers_one_y = center[1] // stepsize_y
-        # num_centers_one = int(min(num_centers_one_x, num_centers_one_y))
-        # deltas = np.array([[stepsize_x * n, stepsize_y * n] for n in range(1, num_centers_one+1)])
-        # centers_one = center - deltas
-        # lines_one = [Line(find_points_on_line(center, direction_normal, distance=self.segment_length))
-        #          for center in centers_one]
-        #
-        # ## Visualize lines ##
-        # # import matplotlib.pyplot as plt
-        # # plt.imshow(self.fig.img)
-        # # for line in lines_one:
-        # #     (x1, y1), (x2, y2) = line.endpoints
-        # #     plt.plot([x1, x2], [y1, y2], c='r')
-        # # plt.show()
-        #
-        # try:
-        #     other_arrows = copy.copy(self.arrows)
-        #     other_arrows.remove(arrow)
-        #     arrow_overlap = [any(self._check_overlap(l, a.panel) for a in other_arrows) for l in lines_one].index(True)
-        # except ValueError:
-        #     arrow_overlap = None
-        #
-        # if arrow_overlap is not None:
-        #     lines_one = lines_one[:arrow_overlap]
-        # diags_one = []
-        # for l in lines_one:
-        #     for d in self.diagrams:
-        #         if self.sufficient_overlap(l, d.panel):
-        #             diags_one.append(d)
-        # diags_one = list(set(diags_one))
-        # ##### REVISION FINISHED - the conditions diag was not classified based on overlap.
-        # ## It should be excluded but maybe the overlap criteria should be less restrictive in general?
-        # ### Wrap the above code inside a function and duplicate for the other side
-        #
-        #
-        # ## Check any overlap overlaps with arrows, discard all lines after the first overlap
-        # ## Then check overlaps with diagrams and include if sufficient overlap
-        #
-        # num_centers_two_x = (self.fig.img.shape[1] - center[0]) // stepsize_x
-        # num_centers_two_y = (self.fig.img.shape[0] - center[1]) // stepsize_y
-        # num_centers_two = int(min(num_centers_two_x, num_centers_two_y))
-        # deltas = np.array([[stepsize_x * n, stepsize_y * n] for n in range(1, num_centers_two+1)])
-        # centers_two = center + deltas
-        # lines_two = [Line(find_points_on_line(center, direction_normal, distance=self.segment_length))
-        #          for center in centers_two]
-        #
-        # try:
-        #     other_arrows = copy.copy(self.arrows)
-        #     other_arrows.remove(arrow)
-        #     arrow_overlap = [any(self._check_overlap(l, a.panel) for a in other_arrows) for l in lines_two].index(True)
-        # except ValueError:
-        #     arrow_overlap = None
-        #
-        # if arrow_overlap is not None:
-        #     lines_two = lines_two[:arrow_overlap]
-        #
-        # diags_two = []
-        # for l in lines_two:
-        #     for d in self.diagrams:
-        #         if self.sufficient_overlap(l, d.panel):
-        #             diags_two.append(d)
-        #
-        # diags_two = list(set(diags_two))
-        #
-        # return diags_one, diags_two
-
+    # def visualize_steps(self):
+    #     canvases = [step.visualize(self.fig) for step in self.reaction_steps]
+    #     _Y_SEPARATION = 50
+    #     out_canvas_height = np.sum([c.shape[0] for c in canvases]) + _Y_SEPARATION * (len(canvases) - 1)
+    #     out_canvas_width = np.max([c.shape[1] for c in canvases])
+    #     out_canvas = np.zeros([out_canvas_height, out_canvas_width])
+    #     y_end = 0
+    #     for canvas in canvases:
+    #         h, w = canvas.shape
+    #         out_canvas[y_end:y_end+h, 0:0+w] = canvas
+    #         y_end += h + _Y_SEPARATION
+    #
+    #     plt.imshow(out_canvas)
+    #     plt.show()
 
     def _search_elsewhere(self, where, arrow, direction, direction_normal, switch):
         """
@@ -703,10 +573,14 @@ class RoleProbe:
         in a reaction scheme). Assumes left-to-right reaction scheme. Estimates the optimal alternative search point
         using arrow and diagrams' coordinates in a DBSCAN search.
         This gives clusters corresponding to the multiple lines in a reaction scheme. Performs a search in the new spot.
-        :param str where: Allows either 'down-left' to look below and to the left of arrow, or 'up-right' (above to the right)
-        :param Arrow arrow: Original arrow, around which the search failed
-        :param (float, lambda) distances: pair containing initial search distance and a distance function (usually same as
-        in the parent function)
+        :param where: Allows either 'down-left' to look below and to the left of arrow, or 'up-right' (above to the right)
+        :type where: str
+        :param arrow: Original arrow, around which the search failed
+        :type arrow: BaseArrow
+        :param direction: direction of an arrow specified as a unit (x, y) vector
+        :type direction: tuple[float, float]
+        :param direction_normal: direction of an arrow normal specified as a unity (x, y) vector
+        :type direction_normal: tuple[float, float]
         :return: Collection of found species
         :rtype: list[Diagram]
         """
@@ -740,6 +614,12 @@ class RoleProbe:
         return species
 
     def find_normal_to_arrow(self, arrow):
+        """Finds an approximate arrow normal line by fitting an ellipse.
+
+        :param arrow: analysed arrow
+        :type arrow: BaseArrow
+        :return: arrow normal line
+        :rtype: Line"""
         (x, y), (MA, ma), angle = cv2.fitEllipse(arrow.contour)
         angle = angle - 90  # Angle should be anti-clockwise relative to +ve x-axis
         normal_angle = angle + 90
@@ -750,13 +630,21 @@ class RoleProbe:
         return Line.approximate_line(p_n1, p_n2)
 
     def sufficient_overlap(self, segment, panel):
+        """Probes whether there is a sufficient overlap between a line segment and a panel.
+
+        The overlap is measured as a fraction of the segment lying inside the panel
+        :param segment: probing line segment
+        :type segment: Line
+        :param panel: panel of interest (specifically, a diagram panel)
+        :type panel: Panel
+        :return: whether the overlap between the two is sufficient
+        :rtype: bool"""
         len_segment = euclidean_distance(*segment.endpoints)
         t, l, b, r = panel
         d_diag = euclidean_distance((t,l), (b, r))
         min_overlap = min(len_segment, d_diag) * SchemeConfig.MIN_PROBING_OVERLAP_FACTOR
 
         return self._check_overlap(segment, panel) > min_overlap
-
 
     def _check_overlap(self, segment, panel):
         """Checks overlap between a line segment and a panel. The overlap is defined as a common line segment between
@@ -801,7 +689,7 @@ class RoleProbe:
 
         return direction, direction_normal
 
-    def _probe_around_arrow(self, arrow , region_dims, switch):
+    def _probe_around_arrow(self, arrow, region_dims, switch):
         """Finds diagrams around an arrow within a region.
 
         Each arrow divides an image into two regions: one in which potential reactants are located, and one where
@@ -809,7 +697,14 @@ class RoleProbe:
         take part in a given step. We perform a line scan in both regions along the direction dictated by an arrow.
         To achieve this, we create equidistant lines and we control the direction of search propagation using a switch
         value of -1 or +1 to compute required differences in position from the arrow centre.
-        #TODO: Document this fully
+        :param arrow: Arrow around which we probe
+        :type arrow: BaseArrow
+        :param region_dims: dimensions of the region which is probed (required to perform an adequate number of scans)
+        :type region_dims: tuple[float]
+        :param switch: a switch - either -1 or +1 specifying which side is probed
+        :type switch: int
+        :return: a list of found diagrams in the region
+        :rtype: list[Diagram]
         """
 
         # center = arrow.center
@@ -845,26 +740,6 @@ class RoleProbe:
         #     (x1, y1), (x2, y2) = line.endpoints
         #     plt.plot([x1, x2], [y1, y2], c='r')
         # plt.show()
-        #
-        # try:
-        #     other_arrows = copy.copy(self.arrows)
-        #     other_arrows.remove(arrow)
-        #     arrow_overlap = [any(self._check_overlap(l, a.panel) for a in other_arrows) for l in lines].index(True)
-        # except ValueError:
-        #     arrow_overlap = None
-        #
-        # if arrow_overlap is not None:
-        #     lines = lines[:arrow_overlap]
-        # diags = []
-        #
-        # for l in lines:
-        #     for d in self.diagrams:
-        #         if self.sufficient_overlap(l, d.panel):
-        #             diags.append(d)
-        # diags = list(set(diags))
-        #
-        # return diags
-
 
     def _perform_line_scan(self, arrow, region_dims, start_point, direction, direction_normal, switch):
         # assert switch in [-1, 1]
