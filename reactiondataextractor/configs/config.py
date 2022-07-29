@@ -33,7 +33,6 @@ class ExtractorConfig(Config):
     # Arrow detection threshold (classification)
     ARROW_DETECTOR_THRESH = 0.95
 
-    # UNIFIED_EXTR_MODEL_WT_PATH = os.path.join(Config.ROOT_DIR, 'models/ml_models/unified_detection/weights.h5')
     # Path to the main object detection model
     UNIFIED_EXTR_MODEL_WT_PATH = os.path.join(Config.ROOT_DIR,
                                               '../models/ml_models/unified_detection/model_best_15Mar_diou.pth')
