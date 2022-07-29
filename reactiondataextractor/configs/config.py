@@ -85,12 +85,3 @@ class SchemeConfig(Config):
 class SegmentsConfig(Config):
     # What fraction of a connected component needs to be within a crop to belong to it
     CROP_THRESH_INTER_AREA = 0.95
-
-
-class GlobalFigureMixin:
-    """If no `figure` was passed to an initializer, use the figure stored in configs
-       (set at the beginning of extraction)"""
-    def __init__(self, fig):
-        if fig is None:
-            from configs import Config
-            self.fig = Config.FIGURE
