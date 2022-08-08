@@ -15,9 +15,10 @@ import matplotlib.pyplot as plt
 
 from actions import estimate_single_bond
 from configs.config import Config
-from extractors.arrows import ArrowExtractor
+from extractors.arrows import ArrowExtractor, ArrowDetector, ArrowClassifier
 from extractors.unified import UnifiedExtractor
 from models.base import BaseExtractor
+from reactiondataextractor.models.exceptions import NoArrowsFoundException, NoDiagramsFoundException
 from models.output import ReactionScheme
 from processors import ImageReader, ImageScaler, ImageNormaliser, Binariser
 
@@ -33,10 +34,16 @@ class SchemeExtractor(BaseExtractor):
         """
         self.opts = opts
         self.path = Path(opts.path)
+
+        self._extract_single_image = False if self.path.is_dir() else True
+        if not self._extract_single_image:
+            assert self.opts.output_dir, """For extraction from a directory, you need to provide a path to save the output using --output_dir flag"""
+
         self.arrow_extractor = ArrowExtractor(fig=None)
         self.unified_extractor = UnifiedExtractor(fig=None, arrows=[], use_tiler=self.opts.finegrained_search)
-        self._extract_single_image = False if self.path.is_dir() else True
+
         self.scheme = None
+
 
     @property
     def extracted(self):
@@ -79,18 +86,29 @@ class SchemeExtractor(BaseExtractor):
         binarizer = Binariser(fig)
         fig = binarizer.process()
         Config.FIGURE = fig
+        self._fig = fig
         self.arrow_extractor.fig = fig
         self.unified_extractor.fig = fig
-        print(fig.img)
         estimate_single_bond(fig)
 
-        solid_arrows, eq_arrows, res_arrows, curly_arrows = self.arrow_extractor.extract()
+        try:
+            solid_arrows, eq_arrows, res_arrows, curly_arrows = self.arrow_extractor.extract()
+        except NoArrowsFoundException:
+            print(f"No arrows have been found in an image ({path}). Skipping the image...")
+            return
+
         arrows = solid_arrows + eq_arrows + res_arrows + curly_arrows
 
         all_arrows = solid_arrows + eq_arrows + res_arrows + curly_arrows
         # unified_extractor = UnifiedExtractor(fig, arrows, use_tiler=self.opts.finegrained_search)
         self.unified_extractor.all_arrows = all_arrows
-        diags, conditions, labels = self.unified_extractor.extract()
+
+        try:
+            diags, conditions, labels = self.unified_extractor.extract()
+        except NoDiagramsFoundException:
+            print(f"No diagrams have been found in the image ({path}). Skipping the image...")
+            return
+
         if self.opts.visualize:
             self.plot_extracted()
         # unified_extractor.plot_extracted(ax)
@@ -110,7 +128,6 @@ class SchemeExtractor(BaseExtractor):
         scheme = ReactionScheme(fig, p.reaction_steps)
         if self.opts.output_dir:
             self.save_scheme_to_disk(scheme, path)
-        print(scheme)
         return scheme
 
     def extract_from_dir(self):

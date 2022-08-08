@@ -18,6 +18,7 @@ from matplotlib.patches import Rectangle
 from scipy.stats import mode
 from detectron2 import model_zoo
 
+from models.exceptions import NoDiagramsFoundException
 from reactiondataextractor.models.base import BaseExtractor, Candidate
 from reactiondataextractor.extractors.conditions import ConditionsExtractor
 from reactiondataextractor.extractors.labels import LabelExtractor
@@ -97,6 +98,8 @@ class UnifiedExtractor(BaseExtractor):
         boxes, classes = self.model.detect()
         out_diag_boxes = [box for box, class_ in zip(boxes, classes) if self._class_dict[class_] == Diagram]
         diags = self.postprocess_diagrams(out_diag_boxes)
+        if not diags:
+            raise NoDiagramsFoundException
         text_regions = [TextRegionCandidate(box, class_) for box, class_ in zip(boxes, classes)
                         if self._class_dict[class_] in [Label, Conditions]]
         conditions, labels = self.postprocess_text_regions(text_regions)

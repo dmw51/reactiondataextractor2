@@ -20,7 +20,7 @@ from scipy.ndimage import label
 from torch import load, device, nn
 from configs import ExtractorConfig, Config
 from reactiondataextractor.models.base import BaseExtractor, Candidate
-from reactiondataextractor.models.exceptions import NotAnArrowException
+from reactiondataextractor.models.exceptions import NotAnArrowException, NoArrowsFoundException
 from reactiondataextractor.models.segments import FigureRoleEnum, PanelMethodsMixin, Panel, Figure
 from reactiondataextractor.utils import skeletonize, is_a_single_line
 from reactiondataextractor.models.geometry import Point, Line
@@ -80,6 +80,8 @@ class ArrowExtractor(BaseExtractor):
         # out = demo.draw_fig(self.fig)
         # out = demo.plot_arrow_candidates(out, arrows)
         arrows = self.filter_false_positives(arrows)
+        if not arrows:
+            raise NoArrowsFoundException
         # out = demo.plot_selected_arrow_candidates(out, arrows)
         # demo.savefig('extracted_arrows.png')
         # plt.show()
