@@ -539,13 +539,16 @@ class Panel(Rect, figure.GlobalFigureMixin):
 class Figure(object):
     """A figure img."""
 
-    def __init__(self, img, raw_img, img_detectron=None):
+    def __init__(self, img, raw_img, img_detectron=None, eager_cc_init=True):
         """
         :param numpy.ndarray img: Figure img.
         :param numpy.ndarray raw_img: raw img (without preprocessing, e.g. binarisation)
         :param numpy.ndarray img_detectron: image loaded using the default settings, suitable for prediction in detectron
+        :param bool eager_cc_init: whether the connected components should be computed eagerly (during this initialization)
+        or lazily at a later stage - for optimized performance
         """
         self.connected_components = None
+        self.eager_cc_init = eager_cc_init
         self.img = img
         self.raw_img = raw_img
         self.img_detectron = img_detectron
@@ -569,7 +572,8 @@ class Figure(object):
     @img.setter
     def img(self, value):
         self._img = value
-        self.set_connected_components()
+        if self.eager_cc_init:
+            self.set_connected_components()
 
     def __repr__(self):
         return '<%s>' % self.__class__.__name__
@@ -606,7 +610,6 @@ class Figure(object):
         :return set: set of Panels of connected components
         """
 
-        # labelled, _ = ndi.label(self.img)
         panels = []
         # regions = regionprops(labelled)
         # contours, _ = cv2.findContours(self.img, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
@@ -648,9 +651,9 @@ class Figure(object):
             ax.add_patch(rect_bbox)
         plt.show()
 
-    def resize(self, *args, **kwargs):
+    def resize(self, *args,  eager_cc_init=True, **kwargs):
         """Simple wrapper around opencv resize"""
-        return Figure(cv2.resize(self.img, *args, **kwargs), raw_img=self.raw_img)
+        return Figure(cv2.resize(self.img, *args, **kwargs), raw_img=self.raw_img, eager_cc_init=eager_cc_init)
 
     def set_roles(self, panels, role):
         for panel in panels:

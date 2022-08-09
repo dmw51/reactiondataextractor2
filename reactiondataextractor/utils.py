@@ -11,18 +11,12 @@ from __future__ import division
 
 from collections.abc import Container
 import copy
-import math
 import numpy as np
 import cv2
 from scipy import ndimage as ndi
-from scipy.ndimage import label, binary_closing, binary_dilation
-# from skimage.measure import regionprops
-# from skimage.morphology import disk, skeletonize as skeletonize_skimage
-# from skimage.transform import probabilistic_hough_line
+
 from reactiondataextractor.models.geometry import Line, Point, OpencvToSkimageHoughLineAdapter
 from reactiondataextractor.models.segments import Rect, Panel, Figure, FigureRoleEnum
-
-
 
 
 class DisabledNegativeIndices:
@@ -132,19 +126,6 @@ def crop_rect(img, rect_boundary):
     return crop(img, left, right, top, bottom)
 
 
-# def binary_close(fig, size=5):
-#     """ Joins unconnected pixel by dilation and erosion"""
-#
-#     selem = disk(size)
-#
-#     img = np.pad(fig.img, size, mode='constant')
-#     img = cv2.morphologyEx(img, cv2.MORPH_CLOSE, selem)
-#     # img = binary_closing(img, selem)
-#     img = img[size:img.shape[0]-size, size:img.shape[1]-size,...]
-#     # img = crop_skimage(img, size)
-#     return Figure(img, raw_img=fig.raw_img)
-
-
 def binary_floodfill(fig):
     """ Converts all pixels inside closed contour to 1"""
     fig.img = ndi.binary_fill_holes(fig.img)
@@ -171,37 +152,14 @@ def pixel_ratio(fig, rect):
     return ratio
 
 
-# def get_bounding_box(fig):
-#     """ Gets the bounding box of each segment
+# def binary_tag(fig):
+#     """ Tag connected regions with pixel value of 1
 #     :param fig: Input Figure
-#     :returns panels: List of _panel objects
+#     :returns fig: Connected Figure
 #     """
-#     panels = []
-#     regions = regionprops(fig.img)
-#     for region in regions:
-#         y1, x1, y2, x2 = region.bbox
-#         panels.append(Panel(x1, x2, y1, y2, region.label - 1))# Sets tags to start from 0
-#     return set(panels)
-
-
-def binary_tag(fig):
-    """ Tag connected regions with pixel value of 1
-    :param fig: Input Figure
-    :returns fig: Connected Figure
-    """
-    fig = copy.deepcopy(fig)
-    fig.img, no_tagged = ndi.label(fig.img)
-    return fig
-
-
-# def label_and_get_ccs(fig):
-#     """
-#     Convenience function that tags ccs in an image and creates their Panels
-#     :param Figure fig: Input Figure
-#     :return set: set of Panels of connected components
-#     """
-#     labelled = binary_tag(fig)
-#     return get_bounding_box(labelled)
+#     fig = copy.deepcopy(fig)
+#     fig.img, no_tagged = ndi.label(fig.img)
+#     return fig
 
 
 def erase_elements(fig, elements):
@@ -338,7 +296,7 @@ def isolate_patches(fig, to_isolate):
         right = connected_component.right
         isolated[top:bottom+1, left:right+1] = fig.img[top:bottom+1, left:right+1]
 
-    fig = Figure(img=isolated, raw_img=fig.raw_img, )
+    fig = Figure(img=isolated, raw_img=fig.raw_img, eager_cc_init=False)
     fig.connected_components = to_isolate
 
     return fig
@@ -350,44 +308,6 @@ def HoughLinesP(*args, **kwargs):
     if lines is None:
         return []
     return lines
-
-# def postprocessing_close_merge(fig, to_close):
-#     """
-#     Isolate a set of connected components and close them using a small kernel.
-#     Find new, larger connected components. Used for dense images, where appropriate
-#     closing cannot be performed initially.
-#     :param Figure fig: Figure object with binarized image
-#     :param iterable of Panels to_close: a set or list of connected components to close
-#     :return: A smaller set of larger connected components
-#     """
-#     isolated = isolate_patches(fig, to_close)
-#     closed = binary_close(isolated, size=5)
-#     labelled = binary_tag(closed)
-#     panels = get_bounding_box(labelled)
-#     return panels
-#
-#
-# def preprocessing_remove_long_lines(fig):
-#     """
-#     Remove long line separators from an image to improve image closing algorithm
-#     :param Figure fig: Figure with a binarized img attribute
-#     :return: Figure without separators
-#     """
-#     fig = copy.deepcopy(fig)
-#     threshold = int(fig.diagonal//2)
-#     print(threshold)
-#     long_lines = probabilistic_hough_line(fig.img, threshold=threshold)  # Output is two endpoints per line
-#     labelled_img, _ = label(fig.img)
-#     long_lines_list = []
-#     for line in long_lines:
-#         points = [Point(row=y, col=x) for x, y in line]
-#         p1 = points[0]
-#         line_label = labelled_img[p1.row, p1.col]
-#         line_pixels = np.nonzero(labelled_img == line_label)
-#         line_pixels = list(zip(*line_pixels))
-#         long_lines_list.append(Line(pixels=line_pixels))
-#
-#     return erase_elements(fig, long_lines_list)
 
 
 def intersect_rectangles(rect1, rect2):
@@ -481,7 +401,7 @@ def is_a_single_line(fig, panel, line_length):
     """
 
     lines = cv2.HoughLinesP(isolate_patches(fig, [panel]).img, 1, np.pi/180, minLineLength=line_length,
-                            threshold=line_length )
+                            threshold=line_length)
     if lines is None:
         return False
 

@@ -10,10 +10,13 @@ class Config:
     IMG_PATH = None
 
 
+
 class ExtractorConfig(Config):
     """Config used for all extractor classes"""
     # ARROW_DETECTOR_PATH = os.path.join(Config.ROOT_DIR, 'models/ml_models/arrow_detector.hdf5')
     # ARROW_CLASSIFIER_PATH = os.path.join(Config.ROOT_DIR, 'models/ml_models/arrow_classifier.h5')
+    # Whether to use cpu or gpu to run deep models
+    DEVICE = 'cpu'  ## 'cpu' or 'cuda'
     # Path to the arrow detector weights
     ARROW_DETECTOR_PATH = os.path.join(Config.ROOT_DIR, '../models/ml_models/torch_arrow_detector.pt')
     # Path to the arrow classifier weights

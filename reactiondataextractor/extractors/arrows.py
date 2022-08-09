@@ -35,6 +35,7 @@ class ArrowExtractor(BaseExtractor):
 
     def __init__(self, fig):
         super().__init__(fig)
+
         self.line_arrow_extractor = LineArrowCandidateExtractor(fig)
         self.curly_arrow_extractor = CurlyArrowCandidateExtractor(fig)
 
@@ -45,6 +46,9 @@ class ArrowExtractor(BaseExtractor):
         self.arrow_detector.eval()
         self.arrow_classifier = load(ExtractorConfig.ARROW_CLASSIFIER_PATH, map_location=device('cpu'))
         self.arrow_classifier.eval()
+        self.arrow_detector.to(ExtractorConfig.DEVICE)
+        self.arrow_classifier.to(ExtractorConfig.DEVICE)
+
         self.arrows = None
         self._class_dict = {0: SolidArrow,
                             1: EquilibriumArrow,
@@ -130,7 +134,7 @@ class ArrowExtractor(BaseExtractor):
         with torch.no_grad():
             arrows_pred = self.arrow_detector(torch.tensor(arrow_crops)).numpy()
         arrows_pred = arrows_pred > ExtractorConfig.ARROW_DETECTOR_THRESH
-        inliers = np.argwhere(arrows_pred == True)[:,0]
+        inliers = np.argwhere(arrows_pred == True)[:, 0]
         arrows = [arrows[idx] for idx in inliers]
         return arrows
         # solid_arrows = []
@@ -181,11 +185,10 @@ class ArrowExtractor(BaseExtractor):
                 img = (img - min_) / (max_ - min_)
             return img
 
+        ##TODO: Retrain the model with a more consistent preprocessing
         arrow_crop = self.crop_from_raw_img(arrow)
-
-        arrow_crop = arrow_crop.resize((self.fig.raw_img.shape[1], self.fig.raw_img.shape[0]))
-
-        arrow_crop = arrow_crop.resize(ExtractorConfig.ARROW_IMG_SHAPE)
+        arrow_crop = arrow_crop.resize((self.fig.raw_img.shape[1], self.fig.raw_img.shape[0]), eager_cc_init=False)
+        arrow_crop = arrow_crop.resize(ExtractorConfig.ARROW_IMG_SHAPE, eager_cc_init=False)
         arrow_crop = np.pad(arrow_crop.img, ((2, 2), (2, 2)))
         arrow_crop = cv2.resize(arrow_crop, ExtractorConfig.ARROW_IMG_SHAPE)
         arrow_crop = min_max_rescale(arrow_crop)
@@ -265,6 +268,7 @@ class LineArrowCandidateExtractor(BaseExtractor):
                                     threshold=ExtractorConfig.SOLID_ARROW_THRESHOLD,
                                     minLineLength=ExtractorConfig.SOLID_ARROW_MIN_LENGTH, maxLineGap=2)
     # TODO: Fix this Hough Transform (to find optimal number of candidates). Check exactly which arrows were found (visualize)
+        labelled_img, _ = label(img)
         for line in all_lines:
             x1, y1, x2, y2 = line.squeeze()
             # points = [Point(row=y, col=x) for x, y in line]
@@ -279,7 +283,7 @@ class LineArrowCandidateExtractor(BaseExtractor):
             if not is_a_single_line(skeletonized, parent_panel, int(ExtractorConfig.SOLID_ARROW_MIN_LENGTH)):
                 continue
 
-            labelled_img, _ = label(img)
+
 
             parent_label = labelled_img[p1.row, p1.col]
             arrow_pixels = np.nonzero(labelled_img == parent_label)

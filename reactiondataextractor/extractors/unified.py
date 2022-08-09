@@ -25,8 +25,9 @@ from reactiondataextractor.extractors.labels import LabelExtractor
 from configs.config import ExtractorConfig
 from reactiondataextractor.models.reaction import Diagram, Conditions, Label
 from reactiondataextractor.models.segments import Panel, Rect, FigureRoleEnum, Crop, PanelMethodsMixin
-from reactiondataextractor.utils import skeletonize_area_ratio, dilate_fig, erase_elements, find_relative_directional_position, \
-    compute_ioa, lies_along_arrow_normal
+from reactiondataextractor.utils import skeletonize_area_ratio, dilate_fig, erase_elements, \
+    find_relative_directional_position, \
+    compute_ioa, lies_along_arrow_normal, skeletonize, pixel_ratio
 
 parent_dir = os.path.dirname(os.path.abspath(__file__))
 # superatom_file = os.path.join(parent_dir, '..', 'dict', 'superatom.txt')
@@ -510,7 +511,7 @@ class DiagramExtractor(BaseExtractor):
     def extract(self):
         """Main extraction method.
 
-        Extracts diagrams using diagram priors and dilating around them, and later collecting all individual
+        Extract diagrams using diagram priors and dilating around them, and later collecting all individual
         connected components from the original image
         :return: final diagram predictions
         :rtype: list[Diagram]"""
@@ -661,14 +662,16 @@ class DiagramExtractor(BaseExtractor):
         # prio = [cc for cc in self.fig.connected_components if cc.role == FigureRoleEnum.STRUCTUREBACKBONE]
 
         num_iterations = {}
+        skeletonized_fig = skeletonize(self.fig)
         for prior in self.diag_priors:
             top, left, bottom, right = prior
             horz_ext, vert_ext = prior.width // 2, prior.height // 2
             horz_ext = max(horz_ext, ExtractorConfig.DIAG_DILATION_EXT)
             vert_ext = max(vert_ext, ExtractorConfig.DIAG_DILATION_EXT)
 
-            crop_rect = Rect((top - vert_ext,left - horz_ext, bottom + vert_ext, right + horz_ext ))
-            p_ratio = skeletonize_area_ratio(self.fig, crop_rect)
+            crop_rect = Rect((top - vert_ext, left - horz_ext, bottom + vert_ext, right + horz_ext ))
+            # p_ratio = skeletonize_area_ratio(self.fig, crop_rect)
+            p_ratio = pixel_ratio(skeletonized_fig, crop_rect)
             #print(p_ratio)
             # log.debug(f'found in-crop skel_pixel ratio: {p_ratio}')
 
@@ -701,7 +704,7 @@ class Detectron2Adapter:
     ### detectron2 configs ###
     cfg = get_cfg()
     cfg.merge_from_file(model_zoo.get_config_file("COCO-Detection/faster_rcnn_X_101_32x8d_FPN_3x.yaml"))
-    cfg.MODEL.DEVICE = 'cpu'
+    cfg.MODEL.DEVICE = ExtractorConfig.DEVICE
     cfg.MODEL.WEIGHTS = ExtractorConfig.UNIFIED_EXTR_MODEL_WT_PATH
     # model_zoo.get_checkpoint_url("COCO-Detection/faster_rcnn_X_101_32x8d_FPN_3x.yaml")  # Let training initialize from model zoo
     # cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST = 0.2  # set a custom testing threshold

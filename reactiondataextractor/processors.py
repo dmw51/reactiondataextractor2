@@ -242,6 +242,7 @@ class Isolator(Processor):
         # isolated_cc_img_orig = np.zeros_like(img)
         # isolated_cc_img_orig[mask] = img[mask]
         fig_copy = deepcopy(self.fig)
+        # fig_copy.eager_cc_init = False
         fig_copy.img = isolated_cc_img
         return fig_copy
 
