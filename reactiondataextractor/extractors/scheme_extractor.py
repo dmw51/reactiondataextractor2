@@ -21,6 +21,7 @@ from models.base import BaseExtractor
 from reactiondataextractor.models.exceptions import NoArrowsFoundException, NoDiagramsFoundException
 from models.output import ReactionScheme
 from processors import ImageReader, ImageScaler, ImageNormaliser, Binariser
+from recognise import DecimerRecogniser
 
 
 class SchemeExtractor(BaseExtractor):
@@ -121,10 +122,9 @@ class SchemeExtractor(BaseExtractor):
         # if inconsistent_nodes: # Resolve only if a problem is present
         # p.resolve_nodes()
         # p.visualize_steps()
-        # d1, d2 = p.probe_around_arrow(arrows[0])
-        # recogniser = DecimerRecogniser()
-        # for d in diags:
-        #     print(recogniser._recognise_diagram(fig, d))
+        recogniser = DecimerRecogniser()
+        for d in diags:
+            print(recogniser.predict_SMILES(fig, d))
         scheme = ReactionScheme(fig, p.reaction_steps)
         if self.opts.output_dir:
             self.save_scheme_to_disk(scheme, path)

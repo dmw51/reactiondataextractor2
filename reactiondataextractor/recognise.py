@@ -13,19 +13,20 @@ Recognition is achieved using OSRA and performed via a pyOsra wrapper.
 import os
 import itertools
 import logging
+from PIL import Image
 
 import cv2
 import matplotlib.pyplot as plt
-# from skimage.util import pad
+import numpy as np
+import tensorflow as tf
+import efficientnet.tfkeras as efn
 
-# import osra_rgroup
-# from .utils import io_
-# from .utils.processing import clean_output
-# from . import settings
+from DECIMER.config import get_bnw_image, delete_empty_borders, central_square_image, PIL_im_to_BytesIO
+from DECIMER.decimer import tokenizer, DECIMER_V2
 
-# from decimer.DECIMER import load_trained_model, evaluate, decoder
-
-from reactiondataextractor.models.segments import FigureRoleEnum
+# from DECIMER.decimer import load_trained_model, evaluate, decoder
+from models.reaction import Diagram
+from reactiondataextractor.models.segments import FigureRoleEnum, Figure
 from reactiondataextractor.utils import isolate_patches
 
 log = logging.getLogger()
@@ -39,51 +40,104 @@ class DecimerRecogniser:
     def __init__(self, model_id='Canonical'):
         assert model_id.capitalize() in ['Canonical', 'Isomeric', 'Augmented'], "model_id has to be one of the following:\
                                                                             ['Canonical', 'Isomeric', 'Augmented']"
-        self.model_id = model_id
-        self.feature_extractor, self.transformer, self.max_length, self.SELFIES_tokenizer =load_trained_model(model_id)
-        self.temp_path = f'diag_temp.png'
+        # self.model_id = model_id
+        # self.feature_extractor, self.transformer, self.max_length, self.SELFIES_tokenizer = load_trained_model(model_id)
+        # self.temp_path = f'diag_temp.png'
+        self.model = DECIMER_V2
 
-    def predict_SMILES(self, image_path):
-        predicted_SELFIES = evaluate(
-            image_path, self.feature_extractor, self.transformer, self.max_length, self.SELFIES_tokenizer
-        )
-
-        predicted_SMILES = decoder(
-            "".join(predicted_SELFIES).replace("<start>", "").replace("<end>", ""),
-            constraints="hypervalent",
-        )
+    def predict_SMILES(self, fig: Figure, diagram: Diagram) -> str:
+        """
+        This function takes a figure and a diagram inside it, and returns the SMILES
+        representation of the depicted molecule (str).
+        Args:
+            fig (Figure): Analysed reaction scheme figure
+            diagram (Diagram): diagram inside the figure
+        Returns:
+            (str): SMILES representation of the molecule in the input image
+        """
+        diag_crop = diagram.panel.create_crop(fig)
+        chemical_structure = self.decode_image(diag_crop.img_detectron)
+        predicted_tokens = self.model(chemical_structure)
+        predicted_SMILES = self.detokenize_output(predicted_tokens)
+        diagram.smiles = predicted_SMILES
 
         return predicted_SMILES
+    # def _recognise_diagram(self, fig, diagram):
+    #     desired_h_and_w = 299
+    #     w = diagram.panel.width
+    #     h = diagram.panel.height
+    #     pad_h = (desired_h_and_w - h)//2
+    #     pad_w = (desired_h_and_w - w)//2
+    #     if pad_h <= 0 or pad_w <= 0: # img is larger than the desired size
+    #         diag_crop = diagram.panel.create_crop(fig)
+    #         diag_crop = isolate_patches(diag_crop, [cc for cc in diag_crop.connected_components
+    #                                                 if cc.role == FigureRoleEnum.DIAGRAMPART])
+    #         img = cv2.resize(diag_crop.img, (desired_h_and_w, desired_h_and_w))
+    #     else:
+    #         pad_width = (pad_h, pad_h), (pad_w, pad_w)
+    #         diag_crop = diagram.panel.create_padded_crop(fig, pad_width)
+    #         diag_crop = isolate_patches(diag_crop, [cc for cc in diag_crop.connected_components
+    #                                         if cc.role in [FigureRoleEnum.DIAGRAMPART, FigureRoleEnum.DIAGRAMPRIOR]])
+    #         img = diag_crop.img
+    #
+    #     plt.imsave(self.temp_path, img, cmap='binary')
+    #     smiles = self.predict_SMILES(self.temp_path)
+    #     diagram.smiles = smiles
+    #     os.remove(self.temp_path)
+    #     return smiles
 
-    def _recognise_diagram(self, fig, diagram):
-        desired_h_and_w = 299
-        w = diagram.panel.width
-        h = diagram.panel.height
-        pad_h = (desired_h_and_w - h)//2
-        pad_w = (desired_h_and_w - w)//2
-        if pad_h <= 0 or pad_w <= 0: # img is larger than the desired size
-            diag_crop = diagram.panel.create_crop(fig)
-            diag_crop = isolate_patches(diag_crop, [cc for cc in diag_crop.connected_components
-                                                    if cc.role == FigureRoleEnum.DIAGRAMPART])
-            img = cv2.resize(diag_crop.img, (desired_h_and_w, desired_h_and_w))
-        else:
-            pad_width = (pad_h, pad_h), (pad_w, pad_w)
-            diag_crop = diagram.panel.create_padded_crop(fig, pad_width)
-            diag_crop = isolate_patches(diag_crop, [cc for cc in diag_crop.connected_components
-                                            if cc.role in [FigureRoleEnum.DIAGRAMPART, FigureRoleEnum.DIAGRAMPRIOR]])
-            img = diag_crop.img
+    # def recognise_diagrams(self, fig, diagrams):
+    #     preprocessed = [self.preprocess_diagram(diag) for diag in diagrams]
+    #     temp_files = [plt.imsave(self.temp_paths(i), diag) for i, diag in zip(range(len(preprocessed)), preprocessed)]
 
-        plt.imsave(self.temp_path, img, cmap='binary')
-        smiles = self.predict_SMILES(self.temp_path)
-        diagram.smiles = smiles
-        os.remove(self.temp_path)
-        return smiles
+    def decode_image(self, img: np.ndarray):
+        """
+        Loads and preprocesses an image
+        Args:
+            img (np.ndarray): image array
+        Returns:
+            Processed image
+        """
+        # img = self.remove_transparent(img)
+        img = get_bnw_image(img)
+        img = delete_empty_borders(img)
+        img = central_square_image(img)
+        img = PIL_im_to_BytesIO(img)
+        img = tf.image.decode_png(img.getvalue(), channels=3)
+        img = tf.image.resize(img, (299, 299))
+        img = efn.preprocess_input(img)
+        return img
 
-    def recognise_diagrams(self, fig, diagrams):
-        preprocessed = [self.preprocess_diagram(diag) for diag in diagrams]
-        temp_files = [plt.imsave(self.temp_paths(i), diag) for i, diag in zip(range(len(preprocessed)), preprocessed)]
+    def detokenize_output(self, predicted_array: int) -> str:
+        """
+        This function takes the predited tokens from the DECIMER model
+        and returns the decoded SMILES string.
+        Args:
+            predicted_array (int): Predicted tokens from DECIMER
+        Returns:
+            (str): SMILES representation of the molecule
+        """
+        outputs = [tokenizer.index_word[i] for i in predicted_array[0].numpy()]
+        prediction = (
+            "".join([str(elem) for elem in outputs])
+            .replace("<start>", "")
+            .replace("<end>", "")
+        )
 
-
+        return prediction
+    # def remove_transparent(self, img: np.ndarray):
+    #     """
+    #     Removes the transparent layer from a PNG image with an alpha channel
+    #     ___
+    #     image_path (str): path of input image
+    #     ___
+    #     Output: PIL.Image
+    #     """
+    #     # png = Image.open(image_path).convert("RGBA")
+    #     png = Image.fromarray(img, "RGBA")
+    #     background = Image.new("RGBA", png.size, (255, 255, 255))
+    #
+    #     alpha_composite = Image.alpha_composite(background, png)
 
 # class PyOsraRecogniser:
 #     """Used to optical chemical structure recognition of diagrams

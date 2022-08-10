@@ -11,6 +11,7 @@ class Config:
 
 
 
+
 class ExtractorConfig(Config):
     """Config used for all extractor classes"""
     # ARROW_DETECTOR_PATH = os.path.join(Config.ROOT_DIR, 'models/ml_models/arrow_detector.hdf5')
@@ -18,9 +19,9 @@ class ExtractorConfig(Config):
     # Whether to use cpu or gpu to run deep models
     DEVICE = 'cpu'  ## 'cpu' or 'cuda'
     # Path to the arrow detector weights
-    ARROW_DETECTOR_PATH = os.path.join(Config.ROOT_DIR, '../models/ml_models/torch_arrow_detector.pt')
+    ARROW_DETECTOR_PATH = os.path.join(Config.ROOT_DIR, '../models/cnn_weights/torch_arrow_detector.pt')
     # Path to the arrow classifier weights
-    ARROW_CLASSIFIER_PATH = os.path.join(Config.ROOT_DIR, '../models/ml_models/torch_arrow_classifier.pt')
+    ARROW_CLASSIFIER_PATH = os.path.join(Config.ROOT_DIR, '../models/cnn_weights/torch_arrow_classifier.pt')
     # Shape of an arrow image fed to the detector model
     ARROW_IMG_SHAPE = [64, 64]
     # Hough transform threshold and minimal length for arrow candidate detection
@@ -38,7 +39,7 @@ class ExtractorConfig(Config):
 
     # Path to the main object detection model
     UNIFIED_EXTR_MODEL_WT_PATH = os.path.join(Config.ROOT_DIR,
-                                              '../models/ml_models/unified_detection/model_best_15Mar_diou.pth')
+                                              '../models/cnn_weights/model_best_15Mar_diou.pth')
     # UNIFIED_EXTR_MODEL_WT_PATH = os.path.join(Config.ROOT_DIR,
     #                                           'models/ml_models/unified_detection/model_final 2000_bg_0.pth')
     # Threshold for suppressing detected diagrams overlapping with arrows
@@ -76,7 +77,7 @@ class ProcessorConfig(Config):
 class OCRConfig(Config):
     # Minimum area to perform character-wise OCR when poor outcome obtained
     PIECEWISE_OCR_THRESH_AREA = 100 #TODO: This value should be appropriate for commas, dots etc - optimise
-
+    TESSDATA_PATH = '/usr/local/tessdata'
 
 class SchemeConfig(Config):
     # SEARCH_DISTANCE_FACTOR = 0.9

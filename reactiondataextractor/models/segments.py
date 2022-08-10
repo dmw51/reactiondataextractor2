@@ -681,6 +681,7 @@ class Crop(Figure):
         self.cropped_rect = None  # Actual rectangle used for the crop - different if crop_params are out of fig bounds
         self._img = None
         self.raw_img = None
+        self.img_detectron = None
         self.connected_components = None
         self._crop_main_figure()
 
@@ -822,6 +823,7 @@ class Crop(Figure):
         """
         img = self.main_figure.img
         raw_img = self.main_figure.raw_img
+        img_detectron = self.main_figure.img_detectron
         if isinstance(self.crop_params, Collection):
             top, left, bottom, right = self.crop_params
         else:
@@ -836,11 +838,16 @@ class Crop(Figure):
         bottom = min(height, bottom if bottom else width)
         out_img = img[top: bottom, left: right]
         out_raw_img = raw_img[top:bottom, left:right]
+        if img_detectron is not None:
+            d_top, d_left, d_bottom, d_right = Panel((top, left, bottom, right), fig=self.main_figure).in_original_fig()
+            out_detectron_img = img_detectron[d_top:d_bottom, d_left:d_right]
+        else:
+            out_detectron_img = img_detectron
 
         self.cropped_rect = Rect((top, left, bottom, right))
         # self.img = out_img
         # self.raw_img = out_raw_img
-        super().__init__(out_img, out_raw_img)
+        super().__init__(out_img, out_raw_img, img_detectron=out_detectron_img)
 
 
 @coords_deco
