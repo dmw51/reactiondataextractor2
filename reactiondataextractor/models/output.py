@@ -14,16 +14,15 @@ from abc import ABC, abstractmethod
 from collections import Counter
 import cv2
 import numpy as np
-import matplotlib.pyplot as plt
 import json
 
 from sklearn.cluster import DBSCAN
 
-from reactiondataextractor.models.geometry import Line
-from reactiondataextractor.models.reaction import Diagram, ReactionStep
-from reactiondataextractor.models.segments import ReactionRoleEnum
+from .geometry import Line
+from .reaction import Diagram, ReactionStep
+from .segments import ReactionRoleEnum
 from configs.config import SchemeConfig
-from reactiondataextractor.utils import find_points_on_line, euclidean_distance
+from utils import find_points_on_line, euclidean_distance
 
 
 class Graph(ABC):
@@ -584,6 +583,7 @@ class RoleProbe:
         :return: Collection of found species
         :rtype: list[Diagram]
         """
+        assert where in ['down-left', 'up-right']
         fig = self.fig
         diags = self.diagrams
 
@@ -626,8 +626,8 @@ class RoleProbe:
         center = np.asarray([x, y])
         direction_normal = np.asarray([1, np.tan(np.radians(normal_angle))])
         return center, direction_normal
-        p_n1, p_n2 = find_points_on_line(center, direction_normal, distance=self.segment_length)
-        return Line.approximate_line(p_n1, p_n2)
+        # p_n1, p_n2 = find_points_on_line(center, direction_normal, distance=self.segment_length)
+        # return Line.approximate_line(p_n1, p_n2)
 
     def sufficient_overlap(self, segment, panel):
         """Probes whether there is a sufficient overlap between a line segment and a panel.

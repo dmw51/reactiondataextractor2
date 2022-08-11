@@ -30,12 +30,9 @@ from matplotlib.patches import Rectangle
 
 
 import numpy as np
-# from skimage.measure import regionprops
-# from skimage.util import pad
-from reactiondataextractor.configs import figure
+from configs import figure, ProcessorConfig, SegmentsConfig
 from .geometry import Line, Point
-# from .. import settings
-from configs.config import ProcessorConfig, SegmentsConfig
+# from configs.config import ProcessorConfig, SegmentsConfig
 
 log = logging.getLogger('extract.segments')
 
@@ -89,14 +86,8 @@ class ReactionRoleEnum(Enum):
 
 
 class PanelMethodsMixin:
-    """If an attribute is not found in the usual places, try to look it up inside ``panel`` attribute. Used for
-    backward compatibility"""
-    # def __getattr__(self, item):
-    #     return super().panel.__getattr__(item)
-    #     # self.panel.(item)
-    #     # if attr:
-    #     #     return attr
-
+    """A mixin class used to directly access panel attributes inside more complex objects.
+    Used for backward compatibility."""
     @property
     def center(self):
         return self.panel.center

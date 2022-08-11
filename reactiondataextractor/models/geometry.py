@@ -73,7 +73,6 @@ class Line:
             self.pixels = self.interpolate_pixels(*self.endpoints)
         return self.pixels
 
-
     @slope.setter
     def slope(self, value):
         self._slope = value
@@ -89,7 +88,7 @@ class Line:
         try:
             x1, y1 = p1.col, p1.row
             x2, y2 = p2.col, p2.row
-        except AttributeError: # Not a Point; assume (x, y) pair
+        except AttributeError:  # Not a Point; assume (x, y) pair
             x1, y1 = p1
             x2, y2 = p2
 
@@ -146,11 +145,11 @@ class Line:
 
         elif abs(slope) >= 1:
             ordered_points = sorted([point_1, point_2], key=lambda point: point.row)
-            pixels =  Line.bresenham_line_y_dominant(*ordered_points, slope)
+            pixels = Line.bresenham_line_y_dominant(*ordered_points, slope)
 
         elif abs(slope) < 1:
             ordered_points = sorted([point_1, point_2], key=lambda point: point.col)
-            pixels =  Line.bresenham_line_x_dominant(*ordered_points, slope)
+            pixels = Line.bresenham_line_x_dominant(*ordered_points, slope)
         return Line(pixels=pixels, endpoints=(point_1, point_2))
 
     def interpolate_pixels(self, point_1, point_2):
@@ -252,5 +251,4 @@ class OpencvToSkimageHoughLineAdapter:
         cv_line = self.cv_lines[self._i]
         x1, y1, x2, y2 = cv_line.squeeze()
         self._i += 1
-        return ((x1, y1), (x2, y2))
-
+        return (x1, y1), (x2, y2)

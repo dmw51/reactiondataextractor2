@@ -124,7 +124,7 @@ class SchemeExtractor(BaseExtractor):
         # p.visualize_steps()
         recogniser = DecimerRecogniser()
         for d in diags:
-            print(recogniser.predict_SMILES(fig, d))
+            recogniser.predict_SMILES(fig, d)
         scheme = ReactionScheme(fig, p.reaction_steps)
         if self.opts.output_dir:
             self.save_scheme_to_disk(scheme, path)

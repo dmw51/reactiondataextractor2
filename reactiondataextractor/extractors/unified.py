@@ -19,14 +19,11 @@ from scipy.stats import mode
 from detectron2 import model_zoo
 
 from models.exceptions import NoDiagramsFoundException
-from reactiondataextractor.models.base import BaseExtractor, Candidate
-from reactiondataextractor.extractors.conditions import ConditionsExtractor
-from reactiondataextractor.extractors.labels import LabelExtractor
-from configs.config import ExtractorConfig
-from reactiondataextractor.models.reaction import Diagram, Conditions, Label
+from reactiondataextractor.models import BaseExtractor, Candidate, Label, Conditions, Diagram
 from reactiondataextractor.models.segments import Panel, Rect, FigureRoleEnum, Crop, PanelMethodsMixin
-from reactiondataextractor.utils import skeletonize_area_ratio, dilate_fig, erase_elements, \
-    find_relative_directional_position, \
+from reactiondataextractor.extractors import ConditionsExtractor, LabelExtractor
+from configs.config import ExtractorConfig
+from reactiondataextractor.utils import dilate_fig, erase_elements, find_relative_directional_position, \
     compute_ioa, lies_along_arrow_normal, skeletonize, pixel_ratio
 
 parent_dir = os.path.dirname(os.path.abspath(__file__))

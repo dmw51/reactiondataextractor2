@@ -57,7 +57,7 @@ CHAR_WHITELIST = DIGITS + '+' + ALPHABET_UPPER
 
 OCR_CONFIDENCE = 70
 
-api = tesserocr.PyTessBaseAPI(path=OCRConfig.TESSDATA_PATH, oem=tesserocr.OEM.TESSERACT_ONLY)
+api = tesserocr.PyTessBaseAPI(path='/home/damian/miniconda3/envs/rde-detectron2/share/tessdata/', oem=tesserocr.OEM.TESSERACT_ONLY)
 
 
 def img_to_text(fig, region, whitelist, conf_threshold=70):

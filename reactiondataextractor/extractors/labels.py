@@ -23,8 +23,8 @@ from urllib.error import URLError
 
 import cirpy
 
-from reactiondataextractor.models.base import BaseExtractor
-from reactiondataextractor.models.reaction import Label
+from models.segments import PanelMethodsMixin, Panel
+from reactiondataextractor.models.base import BaseExtractor, TextRegion
 from reactiondataextractor.ocr import ASSIGNMENT, SEPARATORS, CONCENTRATION, LABEL_WHITELIST, img_to_text
 
 
@@ -83,6 +83,62 @@ class LabelExtractor(BaseExtractor):
         text = img_to_text(self.fig, label_candidate.panel, whitelist=LABEL_WHITELIST)
         return Label(text=text, **label_candidate.pass_attributes())
 
+
+class Label(TextRegion, PanelMethodsMixin):
+    """Describes labels and recognised text
+
+    :param panel: bounding box a label
+    :type panel: Panel
+    :param text: label text
+    :type text: str
+    :param r_group: generic r_groups associated with a label
+    :type r_group: str"""
+
+    @classmethod
+    def from_coords(cls, left, right, top, bottom, text):
+        panel = Panel((left, right, top, bottom))
+        return cls(panel, text)
+
+    def __init__(self, panel, text=None, r_group=None, *, _prior_class=None):
+        if r_group is None:
+            r_group = []
+        if text is None:
+            text = []
+        self.panel = panel
+        self._text = text
+        self.r_group = r_group
+        self._prior_class = _prior_class
+        # self._parent_panel = parent_panel
+
+    # @property
+    # def diagram(self):
+    #     return self._parent_panel
+
+    @property
+    def text(self):
+        return self._text
+
+    @text.setter
+    def text(self, value):
+        self._text = value
+
+    def __repr__(self):
+        return f'Label(panel={self.panel}, text={self.text}, r_group={self.r_group})'
+
+    def __str__(self):
+        return f'Label(Text: {", ".join(sent for sent in self.text)})'
+
+    def __hash__(self):
+        return hash(self.panel)
+
+    def __eq__(self, other):
+        return isinstance(other, Label) and self.panel == other.panel
+
+
+    def add_r_group_variables(self, var_value_label_tuples):
+        """ Updates the R-groups for this label."""
+
+        self.r_group.append(var_value_label_tuples)
 
 class RGroupResolver:
     """This class is used for reading diagram labels and recognising R-groups"""

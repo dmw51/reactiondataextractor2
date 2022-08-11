@@ -8,7 +8,7 @@ class Config:
     FIGURE = None
     ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
     IMG_PATH = None
-
+    TESSDATA_PATH = '/usr/local/tessdata'
 
 
 
@@ -77,7 +77,7 @@ class ProcessorConfig(Config):
 class OCRConfig(Config):
     # Minimum area to perform character-wise OCR when poor outcome obtained
     PIECEWISE_OCR_THRESH_AREA = 100 #TODO: This value should be appropriate for commas, dots etc - optimise
-    TESSDATA_PATH = '/usr/local/tessdata'
+
 
 class SchemeConfig(Config):
     # SEARCH_DISTANCE_FACTOR = 0.9

@@ -9,7 +9,7 @@ import cv2
 from scipy.stats import mode
 
 from configs.figure import GlobalFigureMixin
-from reactiondataextractor.models.segments import Rect, Figure
+from reactiondataextractor.models.segments import Figure
 from reactiondataextractor.configs import config
 
 

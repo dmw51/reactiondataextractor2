@@ -21,6 +21,7 @@ from matplotlib.patches import Rectangle
 import re
 
 from configs.config import ExtractorConfig
+from reactiondataextractor.models.reaction import Conditions
 from reactiondataextractor.models.base import BaseExtractor, TextRegion
 from reactiondataextractor.models.segments import FigureRoleEnum
 from reactiondataextractor.ocr import img_to_text, CONDITIONS_WHITELIST
@@ -438,108 +439,108 @@ def clear_conditions_region(fig):
     return erase_elements(fig_no_cond, noise)
 
 
-class Conditions(TextRegion):
-    """
-    This class describes conditions region and associated text
-
-    :param panel: extracted region containing conditions
-    :type panel: Panel
-    :param conditions_dct: dictionary with all parsed conditions
-    :type conditions_dct: dict
-    :param parent_panel: reaction arrow, around which the search for conditions is performed
-    :type parent_panel: SolidArrow
-    :param diags: bounding boxes of all chemical structures found in the region
-    :type diags: list[Panel]
-    """
-
-    def __init__(self, panel, conditions_dct, parent_panel=None, text=None, diags=None, _prior_class=None):
-        self.panel = panel
-        self.text = text
-        self.conditions_dct = conditions_dct
-
-        self._prior_class = _prior_class
-
-        if diags is None:
-            diags = []
-        self._diags = diags
-
-        self._parent_panel = parent_panel
-        # if parent_panel:
-        #     parent_panel.children.append(self)
-
-
-
-    @property
-    def arrow(self):
-        return self._parent_panel
-
-    def __repr__(self):
-        return f'Conditions({self.panel}, {self.conditions_dct}, {self.arrow})'
-
-    def __str__(self):
-        delimiter = '\n------\n'
-        return delimiter + 'Step conditions:' + \
-               '\n'.join(f'{key} : {value}' for key, value in self.conditions_dct.items() if value)  + delimiter
-
-    def __eq__(self, other):
-        if other.__class__ == self.__class__:
-            return self.panel == other.panel
-        else:
-            return False
-
-    def __hash__(self):
-        return hash(sum(self.panel.coords))
-
-    @property
-    def diags(self):
-        return self._diags
-
-    @property
-    def anchor(self):
-        a_pixels = self.arrow.pixels
-        return a_pixels[len(a_pixels)//2]
-
-    @property
-    def coreactants(self):
-        return self.conditions_dct['coreactants']
-
-    @property
-    def catalysts(self):
-        return self.conditions_dct['catalysts']
-
-    @property
-    def other_species(self):
-        return self.conditions_dct['other species']
-
-    @property
-    def temperature(self):
-        return self.conditions_dct['temperature']
-
-    @property
-    def time(self):
-        return self.conditions_dct['time']
-
-    @property
-    def pressure(self):
-        return self.conditions_dct['pressure']
-
-    @property
-    def yield_(self):
-        return self.conditions_dct['yield']
-
-    def merge_conditions_regions(self, other_region):
-        keys = self.conditions_dct.keys()
-        new_dict = {}
-        for k in keys:
-            if isinstance(self.conditions_dct[k], Sequence):
-                new_value = self.conditions_dct[k] + other_region.conditions_dct[k]
-            else:
-                val = self.conditions_dct[k]
-                new_value = val if val else other_region.conditions_dct[k]
-            new_dict[k] = new_value
-        panel = self.panel.create_megapanel([self.panel, other_region.panel], fig=self.panel.fig)
-        text = self.text + other_region.text
-        diags = self._diags + other_region._diags
-
-        return Conditions(panel=panel, conditions_dct=new_dict, parent_panel=self._parent_panel, text=text,diags=diags,
-                          _prior_class=self._prior_class)
+# class Conditions(TextRegion):
+#     """
+#     This class describes conditions region and associated text
+#
+#     :param panel: extracted region containing conditions
+#     :type panel: Panel
+#     :param conditions_dct: dictionary with all parsed conditions
+#     :type conditions_dct: dict
+#     :param parent_panel: reaction arrow, around which the search for conditions is performed
+#     :type parent_panel: SolidArrow
+#     :param diags: bounding boxes of all chemical structures found in the region
+#     :type diags: list[Panel]
+#     """
+#
+#     def __init__(self, panel, conditions_dct, parent_panel=None, text=None, diags=None, _prior_class=None):
+#         self.panel = panel
+#         self.text = text
+#         self.conditions_dct = conditions_dct
+#
+#         self._prior_class = _prior_class
+#
+#         if diags is None:
+#             diags = []
+#         self._diags = diags
+#
+#         self._parent_panel = parent_panel
+#         # if parent_panel:
+#         #     parent_panel.children.append(self)
+#
+#
+#
+#     @property
+#     def arrow(self):
+#         return self._parent_panel
+#
+#     def __repr__(self):
+#         return f'Conditions({self.panel}, {self.conditions_dct}, {self.arrow})'
+#
+#     def __str__(self):
+#         delimiter = '\n------\n'
+#         return delimiter + 'Step conditions:' + \
+#                '\n'.join(f'{key} : {value}' for key, value in self.conditions_dct.items() if value)  + delimiter
+#
+#     def __eq__(self, other):
+#         if other.__class__ == self.__class__:
+#             return self.panel == other.panel
+#         else:
+#             return False
+#
+#     def __hash__(self):
+#         return hash(sum(self.panel.coords))
+#
+#     @property
+#     def diags(self):
+#         return self._diags
+#
+#     @property
+#     def anchor(self):
+#         a_pixels = self.arrow.pixels
+#         return a_pixels[len(a_pixels)//2]
+#
+#     @property
+#     def coreactants(self):
+#         return self.conditions_dct['coreactants']
+#
+#     @property
+#     def catalysts(self):
+#         return self.conditions_dct['catalysts']
+#
+#     @property
+#     def other_species(self):
+#         return self.conditions_dct['other species']
+#
+#     @property
+#     def temperature(self):
+#         return self.conditions_dct['temperature']
+#
+#     @property
+#     def time(self):
+#         return self.conditions_dct['time']
+#
+#     @property
+#     def pressure(self):
+#         return self.conditions_dct['pressure']
+#
+#     @property
+#     def yield_(self):
+#         return self.conditions_dct['yield']
+#
+#     def merge_conditions_regions(self, other_region):
+#         keys = self.conditions_dct.keys()
+#         new_dict = {}
+#         for k in keys:
+#             if isinstance(self.conditions_dct[k], Sequence):
+#                 new_value = self.conditions_dct[k] + other_region.conditions_dct[k]
+#             else:
+#                 val = self.conditions_dct[k]
+#                 new_value = val if val else other_region.conditions_dct[k]
+#             new_dict[k] = new_value
+#         panel = self.panel.create_megapanel([self.panel, other_region.panel], fig=self.panel.fig)
+#         text = self.text + other_region.text
+#         diags = self._diags + other_region._diags
+#
+#         return Conditions(panel=panel, conditions_dct=new_dict, parent_panel=self._parent_panel, text=text,diags=diags,
+#                           _prior_class=self._prior_class)
