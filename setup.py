@@ -22,17 +22,13 @@ setup(
     tests_require=['pytest'],
     include_package_data=True,
     install_requires=[
-        #'chemdataextractor',
-        #'pyosra',
-        'tesseract>=4.1',
-        #'tesserocr>=2.5',
-        'torch',
+        'tesserocr==2.5.1',
         'scipy',
-        'tensorflow',
-        'detectron2',
         'matplotlib',
         'numpy',
-        'opencv'
+        'scikit-learn',
+        'cirpy'
+        
     ],
     classifiers=[
         'Intended Audience :: Developers',

@@ -97,7 +97,7 @@ class ImageReader(Processor):
         :type img: np.ndarray
         :param desired: the expected value associated with background (0 or 255)
         :type desired: int"""
-        bg_value = mode(img.ravel())[0][0]
+        bg_value = mode(img.ravel(), keepdims=False)[0]
 
         if desired == 0:
             if bg_value in range(250, 256):

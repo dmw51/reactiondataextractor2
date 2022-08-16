@@ -18,11 +18,11 @@ import json
 
 from sklearn.cluster import DBSCAN
 
-from .geometry import Line
-from .reaction import Diagram, ReactionStep
-from .segments import ReactionRoleEnum
-from configs.config import SchemeConfig
-from utils import find_points_on_line, euclidean_distance
+from reactiondataextractor.models.geometry import Line
+from reactiondataextractor.models.reaction import Diagram, ReactionStep
+from reactiondataextractor.models.segments import ReactionRoleEnum
+from reactiondataextractor.configs.config import SchemeConfig
+from reactiondataextractor.utils import find_points_on_line, euclidean_distance
 
 
 class Graph(ABC):
@@ -205,8 +205,9 @@ class ReactionScheme(Graph):
         """
 
         for step in self._reaction_steps:
-            [self.add_node(species_group) for species_group in step]
+            self.add_node(step.reactants)
             self.add_node(step.conditions)
+            self.add_node(step.products)
 
         for step in self._reaction_steps:
             self._generate_edge(step.reactants, step.conditions)

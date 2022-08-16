@@ -230,17 +230,17 @@ class UnifiedExtractor(BaseExtractor):
         self.label_extractor.plot_extracted(ax)
         self.conditions_extractor.plot_extracted(ax)
 
-    def detect(self):
-        """A wrapper method used to perform any necessary preprocessing on an input before feeding
-        it into the object detection modeland making predictions.
-        return: predicted bounding boxes and classes
-        rtype: tuple(list(np.ndarray))"""
-        if mode(self.fig.img.reshape(-1))[0][0] == 0:
-            img = np.invert(self.fig.img)
-        else:
-            img = self.fig.img
-        img = (img - img.min()) / (img.max() - img.min())
-        return map(lambda x: x[0].numpy(), self.model.predict(img))  # Predictions for first (and only) image in a batch
+    # def detect(self):
+    #     """A wrapper method used to perform any necessary preprocessing on an input before feeding
+    #     it into the object detection modeland making predictions.
+    #     return: predicted bounding boxes and classes
+    #     rtype: tuple(list(np.ndarray))"""
+    #     if mode(self.fig.img.reshape(-1))[0][0] == 0:
+    #         img = np.invert(self.fig.img)
+    #     else:
+    #         img = self.fig.img
+    #     img = (img - img.min()) / (img.max() - img.min())
+    #     return map(lambda x: x[0].numpy(), self.model.predict(img))  # Predictions for first (and only) image in a batch
 
     def remove_duplicates(self, panels):
         """Removes duplicate panels inside `group`. In this context, duplicates are all panels which cover the same
