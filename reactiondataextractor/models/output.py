@@ -468,11 +468,11 @@ class RoleProbe:
         ref_point = arrow.reference_pt # arrow's center of mass which denoted the products' side
         groups = [group1, group2]
 
-        def compute_ref_group_dist(group, pt):
+        def compute_ref_group_dist(group):
             """Compute distance between reference point and edge of the closest bouding box in a group"""
             return min(bbox.edge_separation(ref_point) for bbox in group)
 
-        prod_group = min(groups, key=lambda x: compute_ref_group_dist(x, ref_point))
+        prod_group = min(groups, key=compute_ref_group_dist)
         groups.remove(prod_group)
         react_group = groups[0]
         return react_group, prod_group
@@ -745,11 +745,15 @@ class RoleProbe:
     def _perform_line_scan(self, arrow, region_dims, start_point, direction, direction_normal, switch):
         # assert switch in [-1, 1]
         region_x_length, region_y_length = region_dims
-        stepsize_x = self.stepsize * direction[0]
-        stepsize_y = self.stepsize * direction[1]
+        epsilon = 1e-5  # Avoid division by 0
+        stepsize_x = max(self.stepsize * direction[0], epsilon)
+        stepsize_y = max(self.stepsize * direction[1], epsilon)
         num_centers_x = abs(region_x_length // stepsize_x)
         num_centers_y = abs(region_y_length // stepsize_y)
         num_centers = int(min(num_centers_x, num_centers_y))
+        if num_centers == 0:  # Handles a case where no line scan can be performed because the arrow lies close to
+                              # image boundary (and no diagrams are present on this boundary)
+            return []
         deltas = np.array([[stepsize_x * n, stepsize_y * n] for n in range(1, num_centers + 1)])
         deltas = deltas * switch
         centers = start_point + deltas

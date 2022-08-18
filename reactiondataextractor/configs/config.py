@@ -8,7 +8,7 @@ class Config:
     FIGURE = None
     ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
     IMG_PATH = None
-    TESSDATA_PATH = '/usr/local/tessdata'
+    TESSDATA_PATH = '/home/damian/miniconda3/envs/rde-detectron2/share/tessdata'
 
 
 

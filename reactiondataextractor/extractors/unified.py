@@ -19,7 +19,8 @@ from scipy.stats import mode
 from detectron2 import model_zoo
 
 from models.exceptions import NoDiagramsFoundException
-from reactiondataextractor.models import BaseExtractor, Candidate, Label, Conditions, Diagram
+from reactiondataextractor.models import BaseExtractor, Candidate
+from reactiondataextractor.models.reaction import Label, Conditions, Diagram
 from reactiondataextractor.models.segments import Panel, Rect, FigureRoleEnum, Crop, PanelMethodsMixin
 from reactiondataextractor.extractors import ConditionsExtractor, LabelExtractor
 from configs.config import ExtractorConfig
@@ -127,7 +128,7 @@ class UnifiedExtractor(BaseExtractor):
         """
         diag_priors = [self.select_diag_prior(bbox) for bbox in out_diag_boxes]
         diag_priors = [Panel(diag) for diag in diag_priors if diag]
-        diag_priors = self.filter_diag_false_positives(diag_priors)
+        # diag_priors = self.filter_diag_false_positives(diag_priors)
         self.diagram_extractor.diag_priors = diag_priors
         diags = self.diagram_extractor.extract()
         return diags
@@ -229,18 +230,6 @@ class UnifiedExtractor(BaseExtractor):
         self.diagram_extractor.plot_extracted(ax)
         self.label_extractor.plot_extracted(ax)
         self.conditions_extractor.plot_extracted(ax)
-
-    # def detect(self):
-    #     """A wrapper method used to perform any necessary preprocessing on an input before feeding
-    #     it into the object detection modeland making predictions.
-    #     return: predicted bounding boxes and classes
-    #     rtype: tuple(list(np.ndarray))"""
-    #     if mode(self.fig.img.reshape(-1))[0][0] == 0:
-    #         img = np.invert(self.fig.img)
-    #     else:
-    #         img = self.fig.img
-    #     img = (img - img.min()) / (img.max() - img.min())
-    #     return map(lambda x: x[0].numpy(), self.model.predict(img))  # Predictions for first (and only) image in a batch
 
     def remove_duplicates(self, panels):
         """Removes duplicate panels inside `group`. In this context, duplicates are all panels which cover the same
@@ -371,35 +360,11 @@ class UnifiedExtractor(BaseExtractor):
         return conditions, labels
 
     def _adjust_class(self, obj, closest):
-        class_ =  self._class_dict[obj._prior_class]
+        class_ = self._class_dict[obj._prior_class]
         seps = {k: obj.edge_separation(v) for k, v in closest.items()}
         thresh_reclassification_dist = ExtractorConfig.UNIFIED_RECLASSIFY_DIST_THRESH_COEFF * np.sqrt(obj.area)
 
         if seps['arrow'] <= seps['diag'] and seps['arrow'] < thresh_reclassification_dist:
-            # ### Form 4 points, 2 at end of arrows (or extending a bit further), 2 extending from a line normal to the
-            # ### arrow's bounding ellipse, and check which is closest. Reclassify as conditions if obj is closer to
-            # ### a normal point
-            # (x, y), (MA, ma), angle = cv2.fitEllipse(closest['arrow'].contour)
-            # angle = angle - 90 # Angle should be anti-clockwise relative to +ve x-axis
-            #
-            # normal_angle = angle + 90
-            # center = np.asarray([x, y])
-            # direction_arrow = np.asarray([1, np.tan(np.radians(angle))])
-            # direction_normal = np.asarray([1, np.tan(np.radians(normal_angle))])
-            # dist = max(ma, MA) / 2
-            # p_a1, p_a2 = find_points_on_line(center, direction_arrow, distance=dist*1.5)
-            # p_n1, p_n2 = find_points_on_line(center, direction_normal, distance=dist* 0.5)
-            # closest_pt = min([p_a1, p_a2, p_n1, p_n2], key=lambda pt: obj.center_separation(pt))
-            # ## Visualize created points
-            # # import matplotlib.pyplot as plt
-            # # plt.imshow(self.fig.img)
-            # # plt.scatter(p_a1[0], p_a1[1], c='r', s=3)
-            # # plt.scatter(p_a2[0], p_a2[1], c='r', s=3)
-            # # plt.scatter(p_n1[0], p_n1[1], c='b', s=3)
-            # # plt.scatter(p_n2[0], p_n2[1], c='b', s=3)
-            # # plt.show()
-            #
-            # if any(np.array_equal(closest_pt, p) for p in[p_n1, p_n2]):
             if lies_along_arrow_normal(closest['arrow'], obj):
                 class_ = Conditions
 

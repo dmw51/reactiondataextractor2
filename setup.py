@@ -23,7 +23,7 @@ setup(
     include_package_data=True,
     install_requires=[
         'tesserocr==2.5.1',
-        'scipy',
+        'scipy==1.9',
         'matplotlib',
         'numpy',
         'scikit-learn',

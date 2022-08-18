@@ -85,8 +85,6 @@ class ArrowExtractor(BaseExtractor):
         # out = demo.draw_fig(self.fig)
         # out = demo.plot_arrow_candidates(out, arrows)
         arrows = self.filter_false_positives(arrows)
-        if not arrows:
-            raise NoArrowsFoundException
         # out = demo.plot_selected_arrow_candidates(out, arrows)
         # demo.savefig('extracted_arrows.png')
         # plt.show()
@@ -97,7 +95,8 @@ class ArrowExtractor(BaseExtractor):
         self._res_arrows = res_arrows
         self._curly_arrows = curly_arrows
         self.arrows = solid_arrows + curly_arrows + res_arrows + eq_arrows
-
+        if not self.arrows:
+            raise NoArrowsFoundException
         return solid_arrows, eq_arrows, res_arrows, curly_arrows
 
     def plot_extracted(self, ax):
@@ -149,6 +148,8 @@ class ArrowExtractor(BaseExtractor):
         # return solid_arrows, curly_arrows
 
     def reclassify(self, arrows):
+        if not arrows:
+            return [], [], [], []
         arrow_crops = [self.preprocess_model_input(arrow) for arrow in arrows]
         arrow_crops = np.stack(arrow_crops, axis=0)
 
@@ -229,6 +230,23 @@ class ArrowExtractor(BaseExtractor):
                 curly_arrows.append(a)
 
         return solid_arrows, eq_arrows, res_arrows, curly_arrows
+
+    # def filter_inside_diagrams(self, diags):
+    #     """Filters poor detections which are fully contained within detected diagrams. Skips horizontal and vertical
+    #     solid arrows"""
+    #     filtered_arrows = []
+    #
+    #     def is_at_boundary(arrow, diag):
+    #         """Returns whether an arrow lies at the boundary of a detected diagram - this can happen when dilation
+    #         is too large and an arrow becomes part of a diagram"""
+    #         diffs = np.abs(np.asarray(arrow.panel.coords) - np.asarray(diag.panel.coords))
+    #         return np.any(diffs < 10)
+    #
+    #     for a in self.arrows:
+    #             # if not (d.contains(a) and not is_at_boundary(a, d)):
+    #         if not any(d.contains(a) and not is_at_boundary(a, d) for d in diags):
+    #             filtered_arrows.append(a)
+    #     self.arrows = filtered_arrows
 
 
 class LineArrowCandidateExtractor(BaseExtractor):
