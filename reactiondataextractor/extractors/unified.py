@@ -684,7 +684,7 @@ class Detectron2Adapter:
         :param use_tiler: Whether to divide the figure into patches and run small object detection on those
         :type use_tiler: bool
         """
-        self.model = DefaultPredictor(self.cfg)
+        self.model = Rde2Predictor(self.cfg)
         self.fig = fig
         self.use_tiler = use_tiler
 
@@ -702,38 +702,40 @@ class Detectron2Adapter:
     def _detect(self):
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            with torch.no_grad():
-                predictions = self.model(self.fig.img_detectron)
-            #visualize predictions
-            # from detectron2.utils.visualizer import Visualizer
-            # import matplotlib.pyplot as plt
-            # vis = Visualizer(self.fig.img_detectron)
-            # vis.draw_instance_predictions(predictions['instances'])
-            # plt.imshow(vis.output.get_image(), cmap=plt.cm.binary)
-            # plt.title('full_image')
-            # plt.show()
-            # for i, p in zip([i1, i2, i3, i4], [p1, p2, p3, p4]):
-            #     vis = Visualizer(i)
-            #     vis.draw_instance_predictions(p['instances'])
-            #     plt.imshow(vis.output.get_image(), cmap=plt.cm.binary)
-            #     plt.show()
-
-            #Idea: Grab all predictions from the whole image detections, and only the smaller boxes from tiled predictions
-            # From big labels, estimate line height and then grab all single line labels from tiles
-            # Merge tiled labels if they span multiple tiles
-            predictions = predictions['instances']
-            if self.use_tiler:
-                tiler = ImageTiler(self.fig.img_detectron, ExtractorConfig.TILER_MAX_TILE_DIMS, predictions)
+            if not self.use_tiler:
+                with torch.no_grad():
+                    predictions = self.model([self.fig.img_detectron])[0]
+                    predictions = predictions['instances']
+            else:
+                tiler = ImageTiler(self.fig.img_detectron, ExtractorConfig.TILER_MAX_TILE_DIMS, main_predictions=None)
                 tiles = tiler.create_tiles()
-                tile_preds = [self.model(t) for t in tiles]
+                with torch.no_grad():
+                    predictions = self.model([self.fig.img_detectron] + tiles)
+                main_predictions = predictions[0]['instances']
+                tiler.main_predictions = main_predictions
+                tile_predictions = predictions[1:]
 
-                tile_predictions = tiler.transform_tile_predictions(tile_preds)
+                tile_predictions = tiler.transform_tile_predictions(tile_predictions)
                 tile_predictions = tiler.filter_small_boxes(tile_predictions)
-                predictions = self.combine_predictions(predictions, tile_predictions)
+                predictions = self.combine_predictions(main_predictions, tile_predictions)
 
             high_scores = predictions.scores.numpy() > ExtractorConfig.UNIFIED_PRED_THRESH
             pred_boxes = predictions.pred_boxes.tensor.numpy()[high_scores]
             pred_classes = predictions.pred_classes.numpy()[high_scores]
+
+        # visualize predictions
+        # from detectron2.utils.visualizer import Visualizer
+        # import matplotlib.pyplot as plt
+        # vis = Visualizer(self.fig.img_detectron)
+        # vis.draw_instance_predictions(predictions['instances'])
+        # plt.imshow(vis.output.get_image(), cmap=plt.cm.binary)
+        # plt.title('full_image')
+        # plt.show()
+        # for i, p in zip([i1, i2, i3, i4], [p1, p2, p3, p4]):
+        #     vis = Visualizer(i)
+        #     vis.draw_instance_predictions(p['instances'])
+        #     plt.imshow(vis.output.get_image(), cmap=plt.cm.binary)
+        #     plt.show()
         return pred_boxes, pred_classes,
 
     def adjust_coord_order_detectron(self, boxes):
@@ -889,3 +891,24 @@ class ImageTiler:
         instances.set('scores', scores)
         return instances
 
+
+class Rde2Predictor(DefaultPredictor):
+    def __init__(self, cfg):
+        super().__init__(cfg)
+
+    def __call__(self, images):
+        """This call method is very similar to that in DefaultPredictor, but supports batched inference"""
+        with torch.no_grad():  # https://github.com/sphinx-doc/sphinx/issues/4258
+            batched_inputs = []
+            for original_image in images:
+                # Apply pre-processing to image.
+                if self.input_format == "RGB":
+                    # whether the model expects BGR inputs or RGB
+                    original_image = original_image[:, :, ::-1]
+                height, width = original_image.shape[:2]
+                image = self.aug.get_transform(original_image).apply_image(original_image)
+                image = torch.as_tensor(image.astype("float32").transpose(2, 0, 1))
+                inputs = {"image": image, "height": height, "width": width}
+                batched_inputs.append(inputs)
+            predictions = self.model(batched_inputs)
+            return predictions
