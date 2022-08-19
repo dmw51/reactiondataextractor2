@@ -370,8 +370,7 @@ class ConditionParser:
         t_units = r'(h(?:ours?)?|m(?:in)?|s(?:econds)?|days?)'
         time_str = re.compile(r'(?<!\w)' + t_values + r'\s?' + t_units + r'(?=$|\s?,)')
         time = re.search(time_str, sentence)
-        if time:
-            return {'Value': float(time.group(1)), 'Units': time.group(2)}
+        return ConditionParser._form_dict_entry(time)
 
     @staticmethod
     def _parse_temperature(sentence):
@@ -406,9 +405,8 @@ class ConditionParser:
 
         p_or = re.compile('(' + '|'.join((p_values1, p_values2)) + ')' + '(' + p_units + ')' + '?')
         pressure = re.search(p_or, sentence)
-        if pressure:
-            units = pressure.group(2) if pressure.group(2) else 'N/A'
-            return {'Value': float(pressure.group(1)), 'Units': units}
+        return ConditionParser._form_dict_entry(pressure)
+
 
     @staticmethod
     def _parse_yield(sentence):

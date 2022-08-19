@@ -6,6 +6,7 @@ import imageio as imageio
 import numpy as np
 
 import cv2
+from PIL import Image
 from scipy.stats import mode
 
 from configs.figure import GlobalFigureMixin
@@ -59,8 +60,15 @@ class ImageReader(Processor):
             img_detectron = cv2.imread(self.filepath)
 
         if img is None and self.ext == '.gif':   # Ensure this special case is treated
-            img = imageio.mimread(self.filepath)
-            img = img[0]
+            # with imageio.get_reader(self.filepath, format='gif') as reader:
+            #     img = reader.get_data(0)
+
+            try:
+                img = imageio.mimread(self.filepath, format='gif')
+                img = img[0]
+            except ValueError:  # Binary images not handled above
+                img = Image.open(self.filepath).convert('L')
+                img = np.asarray(img)
             # img_detectron = img
             # img_detectron = cv2.cvtColor(img_detectron, cv2.COLOR_GRAY2BGR)
             img, img_detectron = self._convert_gif(img)
