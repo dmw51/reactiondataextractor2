@@ -22,6 +22,8 @@ setup(
     tests_require=['pytest'],
     include_package_data=True,
     install_requires=[
+        'detectron2 @ https://dl.fbaipublicfiles.com/detectron2/wheels/cpu/torch1.10/detectron2-0.6%2Bcpu-cp38-cp38-linux_x86_64.whl',
+        'decimer @ git+https://github.com/Kohulan/DECIMER-Image_Transformer.git',
         'tesserocr==2.5.1',
         'scipy==1.9',
         'matplotlib',

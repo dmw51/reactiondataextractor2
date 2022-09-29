@@ -105,8 +105,8 @@ class SchemeExtractor(BaseExtractor):
             print(f"No diagrams have been found in the image ({path}). Skipping the image...")
             return
 
-        if self.opts.visualize:
-            self.plot_extracted()
+        # if self.opts.visualize:
+        #     self.plot_extracted()
 
         p = RoleProbe(fig, self.arrow_extractor.arrows, diags)
         [p.probe_around_arrow(arrow) for arrow in self.arrow_extractor.arrows]

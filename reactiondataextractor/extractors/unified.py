@@ -9,15 +9,16 @@ import warnings
 
 import torch
 from detectron2.config import get_cfg
-from matplotlib import pyplot as plt
-from torch import Tensor
 from detectron2.engine import DefaultPredictor
-from detectron2.structures.instances import  Instances
-from detectron2.structures.boxes import Boxes
+from detectron2.structures import Instances, Boxes
+from matplotlib import pyplot as plt
+
 from matplotlib.patches import Rectangle
 from scipy.stats import mode
 from detectron2 import model_zoo
+from torch import Tensor
 
+# from extractors.lambda_wrapper import Detectron2Adapter
 from models.exceptions import NoDiagramsFoundException
 from reactiondataextractor.models import BaseExtractor, Candidate
 from reactiondataextractor.models.reaction import Label, Conditions, Diagram
