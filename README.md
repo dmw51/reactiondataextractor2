@@ -37,11 +37,13 @@ Then, install ReactionDataExtractor by typing
 
     pip install -e .
     
-This installs the full version of ReactionDataExtractor framework. If you run into problems with underlying Tesseract engine, clone the following repository:
+This installs the full version of ReactionDataExtractor framework. Finally, download the model weights from [Google Drive](https://drive.google.com/file/d/13vSdYaSxC-QKGeaas_EPmo1l2PiJbrtg/view?usp=share_link) and extract the archive into reactiondataextractor/models.
+
+If you run into problems with underlying Tesseract engine, clone the following repository:
 
     git clone https://github.com/tesseract-ocr/tessdata
 
-and replace the TESSDATA_PATH value inside configs/config.py to point to this tessdata directory.
+and replace the TESSDATA_PATH value inside reactiondataextractor/configs/config.py to point to this tessdata directory.
 
 # Getting Started
 

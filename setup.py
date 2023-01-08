@@ -22,14 +22,13 @@ setup(
     tests_require=['pytest'],
     include_package_data=True,
     install_requires=[
-        'detectron2 @ https://dl.fbaipublicfiles.com/detectron2/wheels/cpu/torch1.10/detectron2-0.6%2Bcpu-cp38-cp38-linux_x86_64.whl',
-        'decimer @ git+https://github.com/Kohulan/DECIMER-Image_Transformer.git',
+        'detectron2 @ git+https://github.com/facebookresearch/detectron2',
+        'decimer @ git+https://github.com/dmw51/DECIMER-Image_Transformer.git',
         'tesserocr==2.5.1',
         'scipy==1.9',
-        'matplotlib',
-        'numpy',
         'scikit-learn',
-        'cirpy'
+        'cirpy',
+        'opencv-contrib-python==4.5.*'
         
     ],
     classifiers=[
@@ -38,7 +37,7 @@ setup(
         'License :: OSI Approved :: MIT License',
         'Operating System :: OS Independent',
         'Programming Language :: Python :: 3',
-        'Programming Language :: Python :: 3.6',
+        'Programming Language :: Python :: 3.8',
         'Topic :: Internet :: WWW/HTTP :: Indexing/Search',
         'Topic :: Scientific/Engineering',
         'Topic :: Scientific/Engineering :: Bio-Informatics',
