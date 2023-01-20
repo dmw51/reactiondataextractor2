@@ -25,7 +25,7 @@ from reactiondataextractor.models.reaction import Label, Conditions, Diagram
 from reactiondataextractor.models.segments import Panel, Rect, FigureRoleEnum, Crop, PanelMethodsMixin
 from reactiondataextractor.extractors import ConditionsExtractor, LabelExtractor
 from configs.config import ExtractorConfig
-from reactiondataextractor.utils import dilate_fig, erase_elements, find_relative_directional_position, \
+from utils import dilate_fig, erase_elements, find_relative_directional_position, \
     compute_ioa, lies_along_arrow_normal, skeletonize, pixel_ratio
 
 parent_dir = os.path.dirname(os.path.abspath(__file__))

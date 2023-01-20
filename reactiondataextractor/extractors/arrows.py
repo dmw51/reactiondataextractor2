@@ -26,7 +26,7 @@ from reactiondataextractor.models.geometry import Point
 from reactiondataextractor.models.reaction import SolidArrow, CurlyArrow, EquilibriumArrow, ResonanceArrow, \
     ArrowCandidate
 from reactiondataextractor.processors import Isolator
-from reactiondataextractor.utils import skeletonize, is_a_single_line
+from utils import skeletonize, is_a_single_line
 
 log = logging.getLogger('arrows')
 

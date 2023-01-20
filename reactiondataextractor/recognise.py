@@ -27,7 +27,6 @@ from DECIMER.decimer import tokenizer, DECIMER_V2
 # from DECIMER.decimer import load_trained_model, evaluate, decoder
 from models.reaction import Diagram
 from reactiondataextractor.models.segments import FigureRoleEnum, Figure
-from reactiondataextractor.utils import isolate_patches
 
 log = logging.getLogger()
 # superatom_file = os.path.join(settings.ROOT_DIR, 'dict', 'superatom.txt')

@@ -22,7 +22,7 @@ from reactiondataextractor.models.geometry import Line
 from reactiondataextractor.models.reaction import Diagram, ReactionStep
 from reactiondataextractor.models.segments import ReactionRoleEnum
 from reactiondataextractor.configs.config import SchemeConfig
-from reactiondataextractor.utils import find_points_on_line, euclidean_distance
+from utils import find_points_on_line, euclidean_distance
 
 
 class Graph(ABC):

@@ -10,7 +10,7 @@
 import numpy as np
 
 from configs import config
-from reactiondataextractor.utils import isolate_patches, HoughLinesP
+from utils import isolate_patches, HoughLinesP
 
 
 #

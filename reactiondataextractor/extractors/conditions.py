@@ -25,7 +25,7 @@ from reactiondataextractor.models.reaction import Conditions
 from reactiondataextractor.models.base import BaseExtractor, TextRegion
 from reactiondataextractor.models.segments import FigureRoleEnum
 from reactiondataextractor.ocr import img_to_text, CONDITIONS_WHITELIST
-from reactiondataextractor.utils import DisabledNegativeIndices, erase_elements
+from utils import DisabledNegativeIndices, erase_elements
 
 log = logging.getLogger('extract.conditions')
 
