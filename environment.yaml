@@ -1,4 +1,4 @@
-name: rde2-deploytest
+name: rde2
 channels:
   - pytorch
   - mcs07
