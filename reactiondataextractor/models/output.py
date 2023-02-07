@@ -746,8 +746,8 @@ class RoleProbe:
         # assert switch in [-1, 1]
         region_x_length, region_y_length = region_dims
         epsilon = 1e-5  # Avoid division by 0
-        stepsize_x = max(self.stepsize * direction[0], epsilon)
-        stepsize_y = max(self.stepsize * direction[1], epsilon)
+        stepsize_x = max(self.stepsize * direction[0], epsilon, key=lambda x: abs(x))
+        stepsize_y = max(self.stepsize * direction[1], epsilon, key=lambda x: abs(x))
         num_centers_x = abs(region_x_length // stepsize_x)
         num_centers_y = abs(region_y_length // stepsize_y)
         num_centers = int(min(num_centers_x, num_centers_y))
