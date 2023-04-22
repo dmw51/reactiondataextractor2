@@ -9,7 +9,7 @@ class Config:
     ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
     IMG_PATH = None
     HOME = os.path.expanduser('~')
-    TESSDATA_PATH = f'{HOME}/miniconda3/envs/rde2/share/tessdata'
+    TESSDATA_PATH = f'../tessdata'
     SINGLE_BOND_LENGTH = 1.54
 
 
