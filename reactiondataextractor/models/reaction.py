@@ -15,20 +15,31 @@ from __future__ import division
 from __future__ import print_function
 from __future__ import unicode_literals
 
+import copy
 import logging
+import os
+import re
+from collections import Counter
 from typing import Sequence
+from enum import Enum
 
 import cv2
 import numpy as np
 
+
 from configs import ExtractorConfig
 from processors import Isolator, Binariser
+from reactiondataextractor.configs import Config
+
+
 from .base import TextRegion, Candidate
 from .geometry import Point, Line
-from .segments import Panel, PanelMethodsMixin
-
+from .segments import Panel, PanelMethodsMixin, Figure
+# from reactiondataextractor.extractors.labels import Label
 log = logging.getLogger('extract.reaction')
 
+parent_dir = os.path.dirname(os.path.abspath(__file__))
+r_group_correct_file = os.path.join(parent_dir, '..', 'dict', 'r_placeholders.txt')
 
 class BaseReactionClass(object):
     """
@@ -36,31 +47,68 @@ class BaseReactionClass(object):
     """
 
 
+class LabelType(Enum):
+    SIMPLE = 1
+    VARIANTS = 2
+    UNKNOWN = 3
+
+    @staticmethod
+    def assign_type(label_text):
+        numbers_only = r'^\d+$'
+        chars_only = r'^[[:alpha:]]+$'
+        label_text = label_text.strip()
+        if len(label_text) < 8 and re.search(r'\d+-\d+$', label_text) or re.search(r'\d+[A-Za-z]-[A-Za-z]$', label_text):
+            return LabelType.VARIANTS
+        else:
+            return LabelType.SIMPLE
+        # if re.match(numbers_only, label_text) or re.match(chars_only, label_text):
+        #     return LabelType.SIMPLE
+        #
+        # elif '-' in label_text:
+        #     return LabelType.VARIANTS
+        # else: re.search(r'\d[a-z]', label_text):
+        #     return LabelType.SINGLE_VARIANT
+
 class Diagram(BaseReactionClass, PanelMethodsMixin):
     """This is a base.py class for chemical structures species found in diagrams (e.g. reactants and products)
 
     :param panel: bounding box a diagrams
     :type panel: Panel
-    :param label: label associated with a diagram
-    :type label: Label
+    :param labels: label associated with a diagram
+    :type labels: Label
     :param smiles: SMILES associated with a diagram
     :type smiles: str
-    :param crop: crop containing the diagram
-    :type crop: Crop"""
+"""
 
     @classmethod
-    def from_coords(cls, left, right, top, bottom, label=None, smiles=None, crop=None):
+    def from_coords(cls, left, right, top, bottom, label=None, smiles=None):
         """Class method used for instantiation from coordinates, as used within chemschematicresolver"""
         panel = Panel((left, right, top, bottom) )
-        return cls(panel=panel, label=label, smiles=smiles, crop=crop)
+        return cls(panel=panel, labels=[label], smiles=smiles)
 
-    def __init__(self, panel, label=None, smiles=None, crop=None):
+    def __init__(self, panel, labels=None, smiles=None):
         self._panel = panel
-        self._label = label
+        # self.labels = labels
         self._smiles = smiles
-        self._crop = crop
-        self.children = []
+        self._base_smiles = ''
+        self.smarts = []
+        self.children = [] if labels is None else labels
         self.reaction_steps = []
+        self.text_chars = []
+        # self.markush_extensions = []
+        self.r_groups = []
+        self.r_group_variants = {}
+        self.r_group_placeholders = []
+        self.molecule = None
+        self._base_molecule = None
+        self._fingerprint = None
+        self._corrected = False
+        self.corners = []
+        self.adjacency_matrix = []
+        # self.positional_markush = False
+        self.positions_markush_groups = []
+        self.markush_freq_identifiers = []
+        self.repeating_units = []
         super().__init__()
 
     def __eq__(self, other):
@@ -72,10 +120,10 @@ class Diagram(BaseReactionClass, PanelMethodsMixin):
         return hash(self.panel)
 
     def __repr__(self):
-        return f'{self.__class__.__name__}(panel={self.panel}, smiles={self.smiles}, label={self.label})'
+        return f'{self.__class__.__name__}(panel={self.panel}, smiles={self.smiles}, labels={self.labels})'
 
     def __str__(self):
-        return f'{self.smiles if self.smiles else "???"}, label: {self.label}'
+        return f'{self.smiles if self.smiles else "???"}, labels: {self.labels}'
 
     @property
     def labels(self):
@@ -86,16 +134,14 @@ class Diagram(BaseReactionClass, PanelMethodsMixin):
         return self._panel
 
     @property
+    def crop(self):
+        return self._panel.crop
+
+    @property
     def center(self):
         return self._panel.center
 
-    @property
-    def label(self):
-        return self._label
 
-    @label.setter
-    def label(self, label):
-        self._label = label
 
     @property
     def smiles(self):
@@ -105,35 +151,13 @@ class Diagram(BaseReactionClass, PanelMethodsMixin):
     def smiles(self, smiles):
         self._smiles = smiles
 
-    @property
-    def crop(self):
-        """ Cropped Figure object of the specific diagram"""
-        return self._crop
 
-    @crop.setter
-    def crop(self, fig):
-        self._crop = fig
+class ResolvedDiagram:
 
-    # def compass_position(self, other):
-    #     """ Determines the compass position (NSEW) of other relative to self"""
-    #
-    #     length = other.center[0] - self.center[0]
-    #     height = other.center[1] - self.center[1]
-    #
-    #     if abs(length) > abs(height):
-    #         if length > 0:
-    #             return 'E'
-    #         else:
-    #             return 'W'
-    #     elif abs(length) < abs(height):
-    #         if height > 0:
-    #             return 'S'
-    #         else:
-    #             return 'N'
-    #
-    #     else:
-    #         return None
-
+    def __init__(self, smiles, label_text):
+        self.smiles = smiles
+        self.label_text = label_text
+        self.molecule = AllChem.MolFromSmiles(self.smiles)
 
 class ReactionStep(BaseReactionClass):
     """
@@ -335,11 +359,11 @@ class Conditions(TextRegion):
 class Label(TextRegion, PanelMethodsMixin):
     """Describes labels and recognised text
 
-    :param panel: bounding box a label
+    :param panel: bounding box a labels
     :type panel: Panel
-    :param text: label text
+    :param text: labels text
     :type text: str
-    :param r_group: generic r_groups associated with a label
+    :param r_group: generic r_groups associated with a labels
     :type r_group: str"""
 
     @classmethod
@@ -347,15 +371,22 @@ class Label(TextRegion, PanelMethodsMixin):
         panel = Panel((left, right, top, bottom))
         return cls(panel, text)
 
-    def __init__(self, panel, text=None, r_group=None, *, _prior_class=None):
-        if r_group is None:
-            r_group = []
-        if text is None:
-            text = []
+    def __init__(self, panel, text, r_groups=None, *, _prior_class=None):
+        if r_groups is None:
+            r_groups = []
+        # if text is None:
+        #     text = []
         self.panel = panel
         self._text = text
-        self.r_group = r_group
+        self.r_groups = r_groups
         self._prior_class = _prior_class
+        if self.text:
+            self.type = LabelType.assign_type(self.text[0])
+        else:
+            self.type = LabelType.UNKNOWN
+        self.root = None
+        self.variant_indicators = None
+        self.resolve_variants = False
         # self._parent_panel = parent_panel
 
     # @property
@@ -371,7 +402,7 @@ class Label(TextRegion, PanelMethodsMixin):
         self._text = value
 
     def __repr__(self):
-        return f'Label(panel={self.panel}, text={self.text}, r_group={self.r_group})'
+        return f'Label(panel={self.panel}, text={self.text}, r_groups={self.r_groups})'
 
     def __str__(self):
         return f'Label(Text: {", ".join(sent for sent in self.text)})'
@@ -384,175 +415,21 @@ class Label(TextRegion, PanelMethodsMixin):
 
 
     def add_r_group_variables(self, var_value_label_tuples):
-        """ Updates the R-groups for this label."""
+        """ Updates the R-groups for this labels."""
 
         self.r_group.append(var_value_label_tuples)
 
+    def is_similar_to(self, other_label):
+        text = ' '.join(self.text)
+        other_text = ' '.join(other_label.text)
+        chemical_number_self = re.match(r'\d+', text).group(0)
+        chemical_number_other = re.match(r'\d+', other_text).group(0)
+        if chemical_number_other == chemical_number_self:
+            return True
+        return False
 
-# class BaseArrow(PanelMethodsMixin):
-#     """Base arrow class common to all arrows
-#
-#     :param pixels: pixels forming the arrows
-#     :type pixels: list[Point]
-#     :param line: line found by Hough transform, underlying primitive,
-#     :type line: Line
-#     :param panel: bounding box of an arrow
-#     :type panel: Panel"""
-#
-#     def __init__(self, pixels, line, panel):
-#         if not all(isinstance(pixel, Point) for pixel in pixels):
-#             self.pixels = [Point(row=coords[0], col=coords[1]) for coords in pixels]
-#         else:
-#             self.pixels = pixels
-#
-#         self.line = line
-#         self._panel = panel
-#         slope = self.line.slope
-#         self.sort_pixels()
-#         self._center_px = None
-#
-#     @property
-#     def panel(self):
-#         return self._panel
-#
-#     @property
-#     def is_vertical(self):
-#         return self.line.is_vertical
-#
-#     @property
-#     def center_px(self):
-#         """
-#         Based on a geometric centre of an arrow panel, looks for a pixel nearby that belongs to the arrow.
-#
-#         :return: coordinates of the pixel that is closest to geometric centre and belongs to the object.
-#         If multiple pairs found, return the floor average.
-#         :rtype: Point
-#         """
-#         if self._center_px is not None:
-#             return self._center_px
-#
-#         log.debug('Finding center of an arrow...')
-#         x, y = self.panel.center
-#
-#         log.debug('Found an arrow with geometric center at (%s, %s)' % (y, x))
-#
-#         # Look at pixels neighbouring center to check which actually belong to the arrow
-#         x_candidates = [x+i for i in range(-2, 3)]
-#         y_candidates = [y+i for i in range(-2, 3)]
-#         center_candidates = [candidate for candidate in product(x_candidates, y_candidates) if
-#                              Point(row=candidate[1], col=candidate[0]) in self.pixels]
-#
-#         log.debug('Possible center pixels: %s', center_candidates)
-#         if center_candidates:
-#             self._center_px = np.mean(center_candidates, axis=0, dtype=int)
-#             self._center_px = Point(row=self._center_px[1], col=self._center_px[0])
-#         else:
-#             raise NotAnArrowException('No component pixel lies on the geometric centre')
-#         log.debug('Center pixel found: %s' % self._center_px)
-#
-#         return self._center_px
-#
-#     def sort_pixels(self):
-#         """
-#         Simple pixel sort.
-#
-#         Sorts pixels by row in vertical arrows and by column in all other arrows
-#         :return:
-#         """
-#         if self.is_vertical:
-#             self.pixels.sort(key=lambda pixel: pixel.row)
-#         else:
-#             self.pixels.sort(key=lambda pixel: pixel.col)
-#
-#
-# class SolidArrow(BaseArrow):
-#     """
-#     Class used to represent simple reaction arrows.
-#
-#     :param pixels: pixels forming the arrows
-#     :type pixels: list[Point]
-#     :param line: line found by Hough transform, underlying primitive,
-#     :type line: Line
-#     :param panel: bounding box of an arrow
-#     :type panel: Panel"""
-#
-#     def __init__(self, pixels, line, panel):
-#         super(SolidArrow, self).__init__(pixels, line, panel)
-#         self.react_side = None
-#         self.prod_side = None
-#         a_ratio = self.panel.aspect_ratio
-#         a_ratio = 1/a_ratio if a_ratio < 1 else a_ratio
-#         if a_ratio < 3:
-#             raise NotAnArrowException('aspect ratio is not within the accepted range')
-#
-#         self.react_side, self.prod_side = self.get_direction()
-#         pixel_majority = len(self.prod_side) - len(self.react_side)
-#         num_pixels = len(self.pixels)
-#         min_pixels = min(int(0.02 * num_pixels), 15)
-#         if pixel_majority < min_pixels:
-#             raise NotAnArrowException('insufficient pixel majority')
-#         elif pixel_majority < 2 * min_pixels:
-#             log.warning('Difficulty detecting arrow sides - low pixel majority')
-#
-#         log.debug('Arrow accepted!')
-#
-#     def __repr__(self):
-#         return f'SolidArrow(pixels={self.pixels}, line={self.line}, panel={self.panel})'
-#
-#     def __str__(self):
-#         left, right, top, bottom = self.panel
-#         return f'SolidArrow({left, right, top, bottom})'
-#
-#     def __eq__(self, other):
-#         return self.panel == other.panel
-#
-#     def __hash__(self):
-#         return hash(pixel for pixel in self.pixels)
-#
-#     @property
-#     def hook(self):
-#         """
-#         Returns the last pixel of an arrow hook.
-#         :return:
-#         """
-#         if self.is_vertical:
-#             prod_side_lhs = True if self.prod_side[0].row < self.react_side[0].row else False
-#         else:
-#             prod_side_lhs = True if self.prod_side[0].col < self.react_side[0].col else False
-#         return self.prod_side[0] if prod_side_lhs else self.prod_side[-1]
-#
-#     def get_direction(self):
-#         """Retrieves the direction of an arrow by looking at the number of pixels on each side.
-#
-#         Splits an arrow in the middle depending on its slope and calculated the number of pixels in each part."""
-#         center = self.center_px
-#         # center = Point(center[1], center[0])
-#         if self.is_vertical:
-#             part_1 = [pixel for pixel in self.pixels if pixel.row < center.row]
-#             part_2 = [pixel for pixel in self.pixels if pixel.row > center.row]
-#
-#         elif self.line.slope == 0:
-#             part_1 = [pixel for pixel in self.pixels if pixel.col < center.col]
-#             part_2 = [pixel for pixel in self.pixels if pixel.col > center.col]
-#
-#         else:
-#             p_slope = -1/self.line.slope
-#             p_intercept = center.row - center.col*p_slope
-#             p_line = lambda point: point.col*p_slope + p_intercept
-#             part_1 = [pixel for pixel in self.pixels if pixel.row < p_line(pixel)]
-#             part_2 = [pixel for pixel in self.pixels if pixel.row > p_line(pixel)]
-#
-#         if len(part_1) > len(part_2):
-#             react_side = part_2
-#             prod_side = part_1
-#         else:
-#             react_side = part_1
-#             prod_side = part_2
-#
-#         log.debug('Established reactant and product sides of an arrow.')
-#         log.debug('Number of pixel on reactants side: %s ', len(react_side))
-#         log.debug('product side: %s ', len(prod_side))
-#         return react_side, prod_side
+
+
 
 class BaseArrow(PanelMethodsMixin):
     """Base arrow class common to all arrows
@@ -565,13 +442,14 @@ class BaseArrow(PanelMethodsMixin):
     :param contour: contour af an arrow
     :type contour: np.ndarray"""
 
-    def __init__(self, pixels, panel, line=None, contour=None):
-        if not all(isinstance(pixel, Point) for pixel in pixels):
-            self.pixels = [Point(row=coords[0], col=coords[1]) for coords in pixels]
-        else:
-            self.pixels = pixels
+    def __init__(self, panel, line=None, contour=None):
+        # if not all(isinstance(pixel, Point) for pixel in pixels):
+            # self.pixels = [Point(row=coords[0], col=coords[1]) for coords in pixels]
+        # else:
 
         self.panel = panel
+        self.pixels = panel.pixels
+
         self.line = line
         self.contour = contour
         # slope = self.line.slope
@@ -583,6 +461,13 @@ class BaseArrow(PanelMethodsMixin):
     @property
     def conditions(self):
         return self.children
+    
+    def __repr__(self):
+        return f'{self.__class__.__name__}(panel={self.panel})'
+
+    def __str__(self):
+        top, left, bottom, right = self.panel
+        return f'{self.__class__.__name__}({top, left, bottom, right})'
 
     def merge_children(self):
         """Merges child regions if they're close together"""
@@ -602,12 +487,13 @@ class BaseArrow(PanelMethodsMixin):
     def initialize(self):
         """Given `pixels` and `panel` attributes, this method checks if other (relevant) initialization attributes
         have been precomputed. If not, these should be computed and set accordingly."""
-        if self.line is None:
-            self.line = Line.approximate_line(self.pixels[0], self.pixels[-1])
+        # if self.line is None:
+            # self.line = Line.approximate_line(self.pixels[0], self.pixels[-1])
 
         if self.contour is None:
-            isolated_arrow_fig = Isolator(None, self, isolate_mask=True).process()
-            cnt, _ = cv2.findContours(isolated_arrow_fig.img,
+            img = np.zeros_like(self.panel.fig.img)
+            img[self.panel.pixels] = 255
+            cnt, _ = cv2.findContours(img,
                                       ExtractorConfig.CURLY_ARROW_CNT_MODE, ExtractorConfig.CURLY_ARROW_CNT_METHOD)
             assert len(cnt) == 1
             self.contour = cnt[0]
@@ -619,61 +505,30 @@ class BaseArrow(PanelMethodsMixin):
         mass away from the center point to facilitate comparison
         return: row, col coordinates of the centre of mass of the eroded arrow
         rtype: tuple"""
+        ''
         scaling_factor = 2
         pad_width = 10
-        isolated_arrow = Isolator(None, self, isolate_mask=True).process()
-        arrow_crop = self.panel.create_padded_crop(isolated_arrow, pad_width=pad_width)
-        arrow_crop.img = cv2.resize(arrow_crop.img, (0, 0), fx=scaling_factor, fy=scaling_factor)
-        binarised = Binariser(arrow_crop).process()
-        eroded = cv2.erode(binarised.img, np.ones((6, 6)), iterations=2)
+        img = np.zeros_like(self.panel.fig.img)
+        img[self.panel.pixels] = 255
+        crop = self.panel.create_padded_crop(Figure(img, img), pad_width).img
+        crop = cv2.resize(crop, (0, 0), fx=scaling_factor, fy=scaling_factor)
+        eroded = cv2.erode(crop, np.ones((3, 3)), iterations=2)
 
         #Compute COM in the crop, then transform back to main figure coordinates
-        rows, cols = np.where(eroded == 255)
+        rows, cols = np.nonzero(eroded>200)
         rows, cols = rows/scaling_factor - pad_width, cols/scaling_factor - pad_width
         row, col = int(np.mean(rows)), int(np.mean(cols))
-        row, col = arrow_crop.in_main_fig((row, col))
-
+        top, left = self.panel.top, self.panel.left
+        row, col = row + top, col + left        
         return col, row  # x, y
 
-    # @property
-    # def center_px(self):
+    # def sort_pixels(self):
     #     """
-    #     Based on a geometric centre of an arrow panel, looks for a pixel nearby that belongs to the arrow.
-    #     :return: coordinates of the pixel that is closest to geometric centre and belongs to the object.
-    #     If multiple pairs found, return the floor average.
-    #     :rtype: Point
+    #     Simple pixel sort.
+    #     Sorts pixels by column in all arrows.
+    #     :return:
     #     """
-    #     if self._center_px is not None:
-    #         return self._center_px
-    #
-    #     log.debug('Finding center of an arrow...')
-    #     x, y = self.panel.geometric_centre
-    #
-    #     log.debug('Found an arrow with geometric center at (%s, %s)' % (y, x))
-    #
-    #     # Look at pixels neighbouring center to check which actually belong to the arrow
-    #     x_candidates = [x+i for i in range(-3, 4)]
-    #     y_candidates = [y+i for i in range(-3, 4)]
-    #     center_candidates = [candidate for candidate in product(x_candidates, y_candidates) if
-    #                          Point(row=candidate[1], col=candidate[0]) in self.pixels]
-    #
-    #     log.debug('Possible center pixels: %s', center_candidates)
-    #     if center_candidates:
-    #         self._center_px = np.mean(center_candidates, axis=0, dtype=int)
-    #         self._center_px = Point(row=self._center_px[1], col=self._center_px[0])
-    #     else:
-    #         raise NotAnArrowException('No component pixel lies on the geometric centre')
-    #     log.debug('Center pixel found: %s' % self._center_px)
-    #
-    #     return self._center_px
-
-    def sort_pixels(self):
-        """
-        Simple pixel sort.
-        Sorts pixels by column in all arrows.
-        :return:
-        """
-        self.pixels.sort(key=lambda pixel: pixel.col)
+    #     self.pixels.sort(key=lambda pixel: pixel.col)
 
 
 
@@ -687,25 +542,14 @@ class SolidArrow(BaseArrow):
     :param panel: bounding box of an arrow
     :type panel: Panel"""
 
-    def __init__(self, pixels, panel, line=None, contour=None):
+    def __init__(self, panel, line=None, contour=None):
 
         self.line = line
         self.contour = contour
         # self.react_side = None
         # self.prod_side = None
-        super(SolidArrow, self).__init__(pixels, panel)
-        self.sort_pixels()
-
-    # def initialize(self):
-    #     if self.line is None:
-    #         self.line = Line.approximate_line(self.pixels[0], self.pixels[-1])
-    #
-    #     if self.contour is None:
-    #         isolated_arrow_fig = Isolator(None, self, isolate_mask=True).process()
-    #         cnt, _ = cv2.findContours(isolated_arrow_fig.img,
-    #                                   ExtractorConfig.CURLY_ARROW_CNT_MODE, ExtractorConfig.CURLY_ARROW_CNT_METHOD)
-    #         assert len(cnt) == 1
-    #         self.contour = cnt[0]
+        super(SolidArrow, self).__init__(panel)
+        # self.sort_pixels()
 
     @property
     def is_vertical(self):
@@ -715,12 +559,7 @@ class SolidArrow(BaseArrow):
     def slope(self):
         return self.line.slope
 
-    def __repr__(self):
-        return f'SolidArrow(pixels={self.pixels[:5]},..., line={self.line}, panel={self.panel})'
 
-    def __str__(self):
-        top, left, bottom, right = self.panel
-        return f'SolidArrow({top, left, bottom, right})'
 
     def __eq__(self, other):
         if not isinstance(other, BaseArrow):
@@ -730,44 +569,44 @@ class SolidArrow(BaseArrow):
     def __hash__(self):
         return hash(pixel for pixel in self.pixels)
 
-    def sort_pixels(self):
-        """
-        Simple pixel sort.
-        Sorts pixels by row in vertical arrows and by column in all other arrows
-        :return:
-        """
-        if self.is_vertical:
-            self.pixels.sort(key=lambda pixel: pixel.row)
-        else:
-            self.pixels.sort(key=lambda pixel: pixel.col)
+    # def sort_pixels(self):
+    #     """
+    #     Simple pixel sort.
+    #     Sorts pixels by row in vertical arrows and by column in all other arrows
+    #     :return:
+    #     """
+    #     if self.is_vertical:
+    #         self.pixels.sort(key=lambda pixel: pixel.row)
+    #     else:
+    #         self.pixels.sort(key=lambda pixel: pixel.col)
 
 
 class CurlyArrow(BaseArrow):
 
-    def __init__(self, pixels, panel, contour=None, line=None):
+    def __init__(self, panel, contour=None, line=None):
         """Class used to represent curly arrows. Does not make use of the ``line`` attribute,
         and overrides the ``initialize`` method to account for this"""
         self.contour = contour
-        super().__init__(pixels, panel)
+        super().__init__(panel)
         self.line = None
 
-    def initialize(self):
-        if self.contour is None:
-            isolated_arrow_fig = Isolator(None, self, isolate_mask=True).process()
-            cnt, _ = cv2.findContours(isolated_arrow_fig.img,
-                                      ExtractorConfig.CURLY_ARROW_CNT_MODE, ExtractorConfig.CURLY_ARROW_CNT_METHOD)
-            assert len(cnt) == 1
-            self.contour = cnt[0]
+    # def initialize(self):
+    #     if self.contour is None:
+    #         isolated_arrow_fig = Isolator(None, self, isolate_mask=True).process()
+    #         cnt, _ = cv2.findContours(isolated_arrow_fig.img,
+    #                                   ExtractorConfig.CURLY_ARROW_CNT_MODE, ExtractorConfig.CURLY_ARROW_CNT_METHOD)
+    #         assert len(cnt) == 1
+    #         self.contour = cnt[0]
 
 
 class ResonanceArrow(BaseArrow):
     """Class used to represent resonance arrows"""
-    def __init__(self, pixels, panel, line=None, contour=None):
+    def __init__(self, panel, line=None, contour=None):
 
         self.line = line
         self.contour = contour
-        super().__init__(pixels, panel)
-        self.sort_pixels()
+        super().__init__(panel)
+        # self.sort_pixels()
 
     # def initialize(self):
     #     if self.line is None:
@@ -778,27 +617,15 @@ class ResonanceArrow(BaseArrow):
 
 class EquilibriumArrow(BaseArrow):
     """Class used to represent equilibrium arrows"""
-    def __init__(self, pixels, panel, line=None, contour=None):
+    def __init__(self, panel, line=None, contour=None):
 
         self.line = line
         self.contour = contour
-        super().__init__(pixels, panel)
-        self.sort_pixels()
+        super().__init__(panel)
+        # self.sort_pixels()
 
     # def initialize(self):
     #     if self.line is None:
     #         pass
     #     if self.contour is None:
     #         pass
-
-
-class ArrowCandidate(Candidate):
-    """A class to store any attributes that have been computed in the arrow proposal stage. Acts as a cache of values
-    which can be reused when an arrow candidate is accepted. All instances are required to have a `pixels` attribute,
-    which is used to isolate the relevant connected component prior to arrow detection stage"""
-
-    def __init__(self, pixels, panel=None, *, line=None, contour=None):
-        self.pixels = np.array(pixels)
-        self.panel = panel
-        self.line = line
-        self.contour = contour

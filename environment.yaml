@@ -1,5 +1,6 @@
 name: rde2
 channels:
+  - main
   - pytorch
   - mcs07
   - chemdataextractor
@@ -7,8 +8,6 @@ channels:
   - defaults
 dependencies:
   - tesseract=4.1.1
-  - opencv=4.5
-  - pytorch=1.10
+  - pytorch-cpu=1.10
   - torchvision=0.11
   - python=3.8
-  - numpy=1.23

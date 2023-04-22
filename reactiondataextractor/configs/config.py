@@ -10,6 +10,7 @@ class Config:
     IMG_PATH = None
     HOME = os.path.expanduser('~')
     TESSDATA_PATH = f'{HOME}/miniconda3/envs/rde2/share/tessdata'
+    SINGLE_BOND_LENGTH = 1.54
 
 
 
@@ -20,7 +21,7 @@ class ExtractorConfig(Config):
     # Whether to use cpu or gpu to run deep models
     DEVICE = 'cpu'  ## 'cpu' or 'cuda'
     # Path to the arrow detector weights
-    ARROW_DETECTOR_PATH = os.path.join(Config.ROOT_DIR, '../models/cnn_weights/torch_arrow_detector.pt')
+    ARROW_DETECTOR_PATH = os.path.join(Config.ROOT_DIR, '../models/cnn_weights/torch_arrow_detector_resnet18.pt')
     # Path to the arrow classifier weights
     ARROW_CLASSIFIER_PATH = os.path.join(Config.ROOT_DIR, '../models/cnn_weights/torch_arrow_classifier.pt')
     # Shape of an arrow image fed to the detector model
@@ -67,7 +68,8 @@ class ExtractorConfig(Config):
     CONDITIONS_MAX_AREA_FRACTION = 1.5
     # Maximum distance between conditions and the nearest arrow (assumes smaller image dimension is 1024 px)
     CONDITIONS_ARROW_MAX_DIST = 75
-
+    # Maximum allowed distance difference between a labels and the first and second-closest diagram for pair reassignment
+    DIAG_LABEL_MAX_REASSIGNMENT_DISTANCE = 75
 
 class ProcessorConfig(Config):
     # Image binarisation thresholds
@@ -90,3 +92,31 @@ class SchemeConfig(Config):
 class SegmentsConfig(Config):
     # What fraction of a connected component needs to be within a crop to belong to it
     CROP_THRESH_INTER_AREA = 0.95
+
+class GlobalRGroupCache:
+    def __init__(self):
+        self.r_groups = set()
+        self.r_group_variants = {}
+
+    def update_variants(self, variant_dict):
+        for k, v in variant_dict.items():
+            if self.r_group_variants.get(k):
+                self.r_group_variants[k].extend(v)
+            else:
+                self.r_group_variants[k] = v
+                
+class GlobalTextCache:
+    def __init__(self):
+        self.diag_chars = []
+        
+    def extend(self, iterable):
+        self.diag_chars.extend(iterable)
+    
+    def append(self, v):
+        self.diag_chars.append(v)
+    
+    def __iter__(self):
+        return iter(self.diag_chars)
+
+global_r_group_cache = GlobalRGroupCache()
+global_text_cache = GlobalTextCache()

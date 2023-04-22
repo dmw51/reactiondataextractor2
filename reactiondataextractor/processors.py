@@ -232,12 +232,12 @@ class Isolator(Processor):
         pass
 
     def _isolate_mask(self):
-        rows, cols = zip(*self.to_isolate.pixels)
+        rows, cols = self.to_isolate.pixels
         # if self.use_raw_img:
         #     img = self.fig.raw_img
         # else:
         #     img = self.fig.img
-        mask = np.zeros_like(self.img, dtype=np.bool)
+        mask = np.zeros_like(self.img, dtype=bool)
         mask[rows, cols] = True
         isolated_cc_img = np.zeros_like(self.img, dtype=np.uint8)
         isolated_cc_img[mask] = self.img[mask]

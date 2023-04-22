@@ -1,11 +1,6 @@
 # Spelling corrections for atom labels and abbreviations
 # that might not be correctly parsed by OCR engine
-# You can run osra with -d option to check the spelling correction
-# process - the output looks like:
 # OCR string --> Corrected String --> Final Output
-# Note that by default OSRA might try as many as 3 different resolutions
-# so you may have quite a bit of output to look through. Try a specific
-# resolution (with -r switch) or choose the best match.
 # Empty lines are ignored and lines starting with # are comments
 
 Ci  Cl
@@ -474,4 +469,3 @@ PMRN PMBN
 * Xx
 ** Xx
 *** Xx
-

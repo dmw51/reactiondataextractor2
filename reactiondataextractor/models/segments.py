@@ -18,6 +18,7 @@ email: m.swain@me.com
 from __future__ import absolute_import
 from __future__ import division
 
+import copy
 from collections import Sequence
 from collections.abc import Collection
 from enum import Enum
@@ -31,6 +32,8 @@ from matplotlib.patches import Rectangle
 
 import numpy as np
 from configs import figure, ProcessorConfig, SegmentsConfig
+from scipy.stats import mode
+
 from .geometry import Line, Point
 # from configs.config import ProcessorConfig, SegmentsConfig
 
@@ -63,7 +66,7 @@ class FigureRoleEnum(Enum):
     SUPERATOMCHAR = 3
     LABELCHAR = 4
     DIAGRAMPRIOR = 5
-    DIAGRAMPART = 6   # Either a solitary bond-line (e.g. double bond) ar a superatom label
+    DIAGRAMPART = 6   # Either a solitary bond-line (e.g. double bond) ar a superatom labels
     BONDLINE = 7
     OTHER = 8
     TINY = 9   # Used for tiny ccs that have not been assigned (noise or small dots)
@@ -75,7 +78,7 @@ class ReactionRoleEnum(Enum):
     Original ccs are well described using the above ``FigureRoleEnum`` and hence this enum is only used for panels in
     (or coming from) dilated figure - in particular, to describe which structures are reactants and products,
     and which form part of the conditions region. ``ARROW`` and ``LABEL`` describe (if needed) corresponding
-    dilated arrows and label regions
+    dilated arrows and labels regions
     """
     ARROW = 1
     CONDITIONS = 2
@@ -389,6 +392,17 @@ class Rect(object):
         else:  # rectangles intersect
             return 0.
 
+    def find_relative_orientation(self, other_rect):
+        t1, l1, b1, r1 = self
+        t2, l2, b2, r2 = other_rect
+
+        left = r2 < l1
+        right = r1 < l2
+        bottom = b1 < t2
+        top = b2 < t1
+
+        return top, left, bottom, right
+
     def overlaps_vertically(self, other_rect):
         """
         Return True if two `Rect` objects overlap along the vertical axis (i.e. when projected onto it), False otherwise
@@ -443,6 +457,14 @@ class Rect(object):
         iou = area_intersection / (area_a + area_b - area_intersection)
         return iou
 
+    def reflect(self, point):
+        x, y = point
+        top, left, bottom, right = self
+        left, right = -(right - x) + x, -(left - x) + x
+        top, bottom = -(bottom - y) + y, - (top - y) + y
+
+        return Panel((int(top), int(left), int(bottom), int(right)), fig=self.fig)
+
 
 class Panel(Rect, figure.GlobalFigureMixin):
 
@@ -459,21 +481,26 @@ class Panel(Rect, figure.GlobalFigureMixin):
         bottom = max(rect.bottom for rect in boxes)
         left = min(rect.left for rect in boxes)
         right = max(rect.right for rect in boxes)
+        tags = []
+        for panel in boxes:
+            if panel.tags:
+                tags.extend(panel.tags)
 
-        megabox = cls((top, left, bottom, right), fig)
+        megabox = cls((top, left, bottom, right), fig, tags=tags)
         return megabox
+
     """ Tagged section inside Figure
     :param coords: (top, left, bottom, right) coordinates of the top-left and bottom-right points
     :type coords: (int, int, int, int)
     :param fig: main figure
     :type fig: Figure
-    :param tag: tag of the panel (usually assigned by ndi.label routine)
-    :type tag: int
+    :param tags: tags of the panel (usually assigned by ndi.labels routine)
+    :type tags: int
     """
-    def __init__(self, coords, fig=None, tag=None):
+    def __init__(self, coords, fig=None, tags=None):
         Rect.__init__(self, coords)
         figure.GlobalFigureMixin.__init__(self, fig)
-        self.tag = tag
+        self.tags = tags
         # if fig is None:
         #     self.fig = settings.main_figure[0]
         # else:
@@ -483,6 +510,8 @@ class Panel(Rect, figure.GlobalFigureMixin):
         self.parent_panel = None
         self._crop = None
         self._pixel_ratio = None
+        self._pixels = []
+        self._zipped_pixels = []
         # self._original_coords = None
         # self._set_original_coords()
 
@@ -497,8 +526,23 @@ class Panel(Rect, figure.GlobalFigureMixin):
     @property
     def crop(self):
         if not self._crop:
-            self._crop = Crop(self.fig, [self.left, self.right, self.top, self.bottom])
+            self._crop = Crop(self.fig, [self.top, self.left, self.bottom, self.right])
         return self._crop
+
+    @property
+    def pixels(self):
+        if not self._pixels:
+            x, y = [], []
+            for tag in self.tags:
+                y_tag, x_tag = np.where(self.fig.labelled_img == tag)
+                x.extend(x_tag)
+                y.extend(y_tag)
+            self._pixels = y, x
+            self._zipped_pixels = set(zip(*self._pixels))
+        return self._pixels
+    
+    def mask_off(self, fig):
+        fig.img[self.pixels] = 0
 
     def merge_underlying_panels(self, fig):
         """
@@ -513,7 +557,7 @@ class Panel(Rect, figure.GlobalFigureMixin):
         ccs_to_merge = [cc for cc in fig.connected_components if self.contains(cc)]
         return Rect.create_megarect(ccs_to_merge)
 
-    def in_original_fig(self):
+    def in_original_fig(self, as_str=True):
         """Transforms `self.coords` to the define the same panel in the main figure. If the figure has not been rescaled,
         returns `self.coords`"""
 
@@ -521,11 +565,21 @@ class Panel(Rect, figure.GlobalFigureMixin):
                                      " with any figure"
         if self.fig._scaling_factor:
             # t, l, b, r = self
-            return list(map(lambda x: int(x / self.fig._scaling_factor), self.coords))
+            ret = list(np.rint(np.asarray(self.coords) / self.fig.scaling_factor).astype(np.int32))
         else:
-            return self.coords
+            ret = self.coords
+        if as_str:
+            ret = list(map(str, ret))
+        return ret
 
-
+    def contains_any_pixel_of(self, other_panel):
+        if self.pixels:
+            zipped_pixels = self._zipped_pixels
+        if other_panel.pixels:
+            other_zipped_pixels = other_panel._zipped_pixels
+        if len(zipped_pixels.intersection(other_zipped_pixels)) > 0:
+            return True
+        return False
 
 class Figure(object):
     """A figure img."""
@@ -538,12 +592,14 @@ class Figure(object):
         :param bool eager_cc_init: whether the connected components should be computed eagerly (during this initialization)
         or lazily at a later stage - for optimized performance
         """
-        self.connected_components = None
+        self._connected_components = None
+        self._img = None
         self.eager_cc_init = eager_cc_init
-        self.img = img
+        self._img = img
         self.raw_img = raw_img
         self.img_detectron = img_detectron
-        self.kernel_sizes = None
+        self.labelled_img = None
+        # self.kernel_sizes = None
         self.single_bond_length = None
         self.width, self.height = img.shape[1], img.shape[0]
         self.center = (int(self.width * 0.5), int(self.height) * 0.5)
@@ -557,13 +613,25 @@ class Figure(object):
         return self._img
 
     @property
+    def connected_components(self):
+        if self._connected_components is None:
+            self.set_connected_components()
+        return self._connected_components
+
+    @connected_components.setter
+    def connected_components(self, value):
+        self._connected_components = value
+
+    @property
     def scaling_factor(self):
         return self._scaling_factor
 
     @img.setter
     def img(self, value):
-        self._img = value
-        if self.eager_cc_init:
+        if self._img is None:
+            self._img = value
+        else:
+            self._img = value
             self.set_connected_components()
 
     def __repr__(self):
@@ -602,17 +670,16 @@ class Figure(object):
         """
 
         panels = []
-        # regions = regionprops(labelled)
-        # contours, _ = cv2.findContours(self.img, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
-        _, _, stats, _ = cv2.connectedComponentsWithStats(cv2.threshold
+        _, labelled, stats, _ = cv2.connectedComponentsWithStats(cv2.threshold
                                                           (self.img, *ProcessorConfig.BIN_THRESH, cv2.THRESH_BINARY)[1],
                                                           connectivity=8)
-
-        for cc_stat in stats:
-            x1, y1, w, h, _= cc_stat
-            if w*h < self.area * 0.85:  # Spurious cc encompassing the whole image is sometimes produced
+        self.labelled_img = labelled
+        for label, cc_stat in enumerate(stats):
+            x1, y1, w, h, _ = cc_stat
+            if w*h < self.area * 0.99:  # Spurious cc encompassing the whole image is sometimes produced
                 x2, y2 = x1 + w, y1 + h
-                panels.append(Panel((y1, x1, y2, x2), fig=self,))
+                panels.append(Panel((y1, x1, y2, x2), fig=self, tags=[label]))
+
 
         # for cnt in contours:
         #     x1, y1, w, h = cv2.boundingRect(cnt)
@@ -620,9 +687,9 @@ class Figure(object):
         #     panels.append(Panel((y1, x1, y2, x2), fig=self,))
         # for region in regions:
         #     y1, x1, y2, x2 = region.bbox
-        #     panels.append(Panel(x1, x2, y1, y2, fig=self, tag=region.label - 1))  # Sets tags to start from 0
+        #     panels.append(Panel(x1, x2, y1, y2, fig=self, tags=region.labels - 1))  # Sets tags to start from 0
 
-        self.connected_components = panels
+        self._connected_components = panels
 
     def role_plot(self):
         """Adds rectangles around each connected component according to its role in a figure"""
@@ -670,10 +737,10 @@ class Crop(Figure):
         self._top_padding = 0
         self._left_padding = 0
         self.cropped_rect = None  # Actual rectangle used for the crop - different if crop_params are out of fig bounds
-        self._img = None
-        self.raw_img = None
-        self.img_detectron = None
-        self.connected_components = None
+        # self._img = None
+        # self.raw_img = None
+        # self.img_detectron = None
+        # self.connected_components = None
         self._crop_main_figure()
 
         # self.set_connected_components()
@@ -724,15 +791,6 @@ class Crop(Figure):
         if hasattr(element, '__len__') and len(element) == 2:
             y, x = element
             return y + self.cropped_rect.top - self._top_padding, x + self.cropped_rect.left - self._left_padding
-        # elem_copy = copy.deepcopy(element)
-        # if hasattr(element, 'row') and hasattr(element, 'col'):
-        #     new_row = element.row + self.cropped_rect.top
-        #     new_col = element.col + self.cropped_rect.left
-        #     attrs = 'row', 'col'
-        #     attr_vals = new_row, new_col
-        #     new_element = element.__class__(row=new_row, col=new_col)
-        #     # [setattr(elem_copy, attr, val) for attr, val in zip(attrs, attr_vals)]
-        #     return new_element
 
         else:
 
@@ -763,48 +821,6 @@ class Crop(Figure):
         new_obj.role = cc.role
         return new_obj
 
-    def set_connected_components(self):
-        """
-        Transforms connected components from the main figure into the frame of reference of the crop. Only the
-        components that fit fully within the crop are included.
-        :return: None
-        """
-        def cropped_rect_contains(cc):
-            """Checks whether a given cc from the main image belongs to a crop.
-
-            To pick relevant ccs from the main figure, we check which ccs are within the ``cropped_rect``.
-            This is done by calculating an intersection between a given ``cc`` and the ``cropped_rect``.
-            If the intersection area is very close to the area of ``cc`` then the connected component is included as
-            a connected component inside the crop as well"""
-            c_top, c_left, c_bottom, c_right = self.cropped_rect
-            ccs_inside = []
-            # for cc in self.main_figure.connected_components:
-            l = max(c_left, cc.left)
-            r = min(c_right, cc.right)
-            t = max(c_top, cc.top)
-            b = min(c_bottom, cc.bottom)
-            w = r - l
-            h = b - t
-            if w > 0 and h > 0:
-                inter_area = w*h
-            else:
-                inter_area = 0
-
-            if inter_area > cc.area * SegmentsConfig.CROP_THRESH_INTER_AREA:
-                return True
-            return False
-
-
-        c_top, c_left, c_bottom, c_right = self.cropped_rect   # c is for 'crop'
-        # TODO: This function should be based on high iou score rather than absolute coordinate values
-
-        # transformed_ccs = [cc for cc in self.main_figure.connected_components if cc.right <= c_right and cc.left >= c_left]
-        # transformed_ccs = [cc for cc in transformed_ccs if cc.bottom <= c_bottom and cc.top >= c_top]
-        ccs_inside = [cc for cc in self.main_figure.connected_components if cropped_rect_contains(cc)]
-        transformed_ccs = [self.in_crop(cc) for cc in ccs_inside]
-
-        self.connected_components = transformed_ccs
-
     def _crop_main_figure(self):
         """
         Crop img.
@@ -830,7 +846,7 @@ class Crop(Figure):
         out_img = img[top: bottom, left: right]
         out_raw_img = raw_img[top:bottom, left:right]
         if img_detectron is not None:
-            d_top, d_left, d_bottom, d_right = Panel((top, left, bottom, right), fig=self.main_figure).in_original_fig()
+            d_top, d_left, d_bottom, d_right = Panel((top, left, bottom, right), fig=self.main_figure).in_original_fig(as_str=False)
             out_detectron_img = img_detectron[d_top:d_bottom, d_left:d_right]
         else:
             out_detectron_img = img_detectron
@@ -839,109 +855,6 @@ class Crop(Figure):
         # self.img = out_img
         # self.raw_img = out_raw_img
         super().__init__(out_img, out_raw_img, img_detectron=out_detectron_img)
+        if img_detectron is not None:
+            self._scaling_factor = self.main_figure.scaling_factor
 
-
-@coords_deco
-class TextLine:
-    """
-    TextLine objects represent lines of text in an img and contain all its connected components and a super-panel
-    associated with them.
-    :param left: left coordinate of a bounding box
-    :type left: int
-    :param right: right coordinate of a bounding box
-    :type right: int
-    :param top: top coordinate of a bounding box
-    :type top: int
-    :param bottom: bottom coordinate of a bounding box
-    :type bottom: int
-    :param fig: main figure
-    :type fig: Figure
-    :param crop: crop of a region in figure containing the text line
-    :type crop: Crop
-    :param anchor: a point in the main figure system that belongs to a text line and situates it within the main
-    coordinate system
-    :type anchor: Point
-    :param connected_components: all connected components bleonging to the text line
-    :type connected_components: list
-    """
-    def __init__(self, left, right, top, bottom, fig=None, crop=None, anchor=None, connected_components=None):
-        if connected_components is None:
-            connected_components = []
-        self.text = None
-        self.crop = crop
-        self._anchor = anchor
-        self.panel = Panel(left, right, top, bottom, fig)
-        self._connected_components = connected_components
-        # self.find_text() # will be used to find text from `connected_components`
-
-    def __repr__(self):
-        return f'TextLine(left={self.left}, right={self.right}, top={self.top}, bottom={self.bottom})'
-
-    def __iter__(self):
-        return iter(self.connected_components)
-
-    def __contains__(self, item):
-        return item in self.connected_components
-
-    def __hash__(self):
-        return hash(self.left + self.right + self.top + self.bottom)
-
-    @property
-    def height(self):
-        return self.panel.height
-
-    @property
-    def in_main_figure(self):
-        """
-        Transforms the text line into the main (figure) coordinate system.
-        :return: self
-        """
-        if self.crop:
-            new_top = self.panel.top + self.crop.cropped_rect.top
-            new_bottom = new_top + self.panel.height
-            if self.connected_components:
-                new_left = self.panel.left + self.crop.cropped_rect.left
-                new_right = new_left + self.panel.width
-                new_ccs = [self.crop.in_main_fig(cc) for cc in self.connected_components]
-            else:
-                new_left = self.panel.left
-                new_right = self.panel.right
-                new_ccs=[]
-
-            return TextLine(new_left, new_right, new_top, new_bottom, connected_components=new_ccs,
-                            anchor=self.crop.in_main_fig(self.anchor))
-        else:
-            return self
-
-    @property
-    def connected_components(self):
-        return self._connected_components
-
-    @connected_components.setter
-    def connected_components(self, value):   # Adjust bbox parameters when 'self._connected_components' are altered
-        self._connected_components = value
-        self.adjust_boundaries()
-
-    @property
-    def anchor(self):
-        return self._anchor
-
-    @anchor.setter
-    def anchor(self, value):
-        if not self._anchor:
-            self._anchor = value
-        else:
-            raise ValueError('An anchor cannot be set twice')
-
-    def adjust_boundaries(self):
-        """Adjusts boundaries of text line based on the extrema of connected components"""
-        left = np.min([cc.left for cc in self._connected_components])
-        right = np.max([cc.right for cc in self._connected_components])
-        top = np.min([cc.top for cc in self._connected_components])
-        bottom = np.max([cc.bottom for cc in self._connected_components])
-        self.panel = Panel(left, right, top, bottom)
-
-    def append(self, element):
-        """Appends new connected component and adjusts boundaries of the text line"""
-        self.connected_components.append(element)
-        self.adjust_boundaries()

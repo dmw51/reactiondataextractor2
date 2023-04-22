@@ -5,13 +5,10 @@ Optical Character Recognition
 
 Extract text from images using Tesseract.
 
-Module adapted by:-
 author: Damian Wilary
 email: dmw51@cam.ac.uk
 
-Initial implementation created by:
-author: Matthew Swain
-email: m.swain@me.com
+
 """
 
 from __future__ import absolute_import
@@ -53,31 +50,72 @@ LABEL_WHITELIST = (ASSIGNMENT + DIGITS + ALPHABET_UPPER + ALPHABET_LOWER + CONCE
                    OTHER  + SUPERSCRIPT + SEPARATORS) + '+'
 CONDITIONS_WHITELIST = DIGITS + ALPHABET_UPPER + ALPHABET_LOWER + CONCENTRATION + SEPARATORS + BRACKETS + SUPERSCRIPT \
                         + HYPHEN + OTHER + '+'
-CHAR_WHITELIST = DIGITS + '+' + ALPHABET_UPPER
+CHAR_WHITELIST = DIGITS + '+' + ALPHABET_UPPER + ALPHABET_LOWER + "',\""
 
 OCR_CONFIDENCE = 70
 
-api = tesserocr.PyTessBaseAPI(path=OCRConfig.TESSDATA_PATH, oem=tesserocr.OEM.TESSERACT_ONLY)
+# api = tesserocr.PyTessBaseAPI(path=OCRConfig.TESSDATA_PATH, oem=tesserocr.OEM.TESSERACT_ONLY)
+api = tesserocr.PyTessBaseAPI(init=False)
+api.InitFull(
+    path=OCRConfig.TESSDATA_PATH,
+    variables={"load_system_dawg": "F",
+               "load_freq_dawg": "F"},
+    oem=tesserocr.OEM.TESSERACT_ONLY
+)
+
+class TextChar:
+    def __init__(self, panel):
+        # crop = panel.crop
+        # crop.img = crop.img_detectron
+        self.panel = panel
+        ocr_img = cv2.cvtColor(self.panel.crop.img_detectron, cv2.COLOR_RGB2GRAY)
+        ocr_img = cv2.imread(pil_enhance(cv2_preprocess(ocr_img)), cv2.IMREAD_GRAYSCALE)
+
+        text_blocks_char = get_text(ocr_img, whitelist=CHAR_WHITELIST, psm=PSM.SINGLE_CHAR)
+        text_blocks_word = get_text(ocr_img, whitelist=CHAR_WHITELIST, psm=PSM.SINGLE_WORD)
+
+        # get_text(self.panel.crop.img, psm=PSM.SINGLE_CHAR, whitelist=CHAR_WHITELIST)
+        # text_blocks_word = get_text(self.panel.crop.img, psm=PSM.SINGLE_WORD, whitelist=CHAR_WHITELIST)
+        text_blocks = max([text_blocks_char, text_blocks_word], key=lambda output: output[0].confidence if output else 0)
+        if text_blocks:
+            text = text_blocks[0].text.strip()
+            self.confidence = np.mean([block.confidence for block in text_blocks])
+            self.text = text
+        else:
+            self.text = ''
+            self.confidence = 0.0
 
 
-def img_to_text(fig, region, whitelist, conf_threshold=70):
-    top, left, bottom, right = region
-    img = fig.img[top:bottom, left:right]
+
+    def __repr__(self):
+        return f'TextChar({self.panel})'
+
+    def __str__(self):
+        return f"TextChar('{self.text}')"
+
+
+def img_to_text(img, whitelist, conf_threshold=70, psm=None):
+    if psm is None:
+        psm = PSM.SINGLE_BLOCK
+    # top, left, bottom, right = region
+    # img = crop.img
     img = cv2.imread(pil_enhance(cv2_preprocess(img)), cv2.IMREAD_GRAYSCALE)
-    initial_ocr = get_text(img, psm=PSM.SINGLE_BLOCK, whitelist=whitelist, pad_val=0)
-    analyser = OCRAnalyser(img, initial_ocr, conf_threshold=conf_threshold)
-    return analyser.build_output()
+    initial_ocr = get_text(img, psm=psm, whitelist=whitelist, pad_val=0)
+    if initial_ocr:
+        analyser = OCRAnalyser(img, initial_ocr, conf_threshold=conf_threshold)
+        return analyser.build_output()
+    return []
 
 
 def cv2_preprocess(img):
 
-    img = cv2.resize(img, (0,0), fx=3, fy=3)
+    img = cv2.resize(img, (0,0), fx=4, fy=4)
     kernel = np.ones((3, 3), np.uint8)
 
     img = cv2.erode(img, kernel, iterations=1)
     img = cv2.dilate(img, kernel, iterations=1)
 
-    img = cv2.threshold(cv2.GaussianBlur(img, (0, 0), 1), 100, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
+    img = cv2.threshold(img, 40, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
 
     cv2.imwrite('temp.png', img)
     return 'temp.png'

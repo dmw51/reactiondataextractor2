@@ -1,0 +1,9 @@
+R R
+R! R1
+R$ R2
+R^ R3
+R< R4
+R> R5
+Re R6
+R£ R7
+R¢ R8

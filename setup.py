@@ -26,9 +26,13 @@ setup(
         'decimer @ git+https://github.com/dmw51/DECIMER-Image_Transformer.git',
         'tesserocr==2.5.1',
         'scipy==1.9',
+        'numpy',
         'scikit-learn',
         'cirpy',
-        'opencv-contrib-python==4.5.*'
+        'opencv-contrib-python',
+        'pypotrace==0.3',
+        'protobuf==3.20.*',
+        'matplotlib'
         
     ],
     classifiers=[
@@ -37,7 +41,7 @@ setup(
         'License :: OSI Approved :: MIT License',
         'Operating System :: OS Independent',
         'Programming Language :: Python :: 3',
-        'Programming Language :: Python :: 3.8',
+        'Programming Language :: Python :: 3.6',
         'Topic :: Internet :: WWW/HTTP :: Indexing/Search',
         'Topic :: Scientific/Engineering',
         'Topic :: Scientific/Engineering :: Bio-Informatics',

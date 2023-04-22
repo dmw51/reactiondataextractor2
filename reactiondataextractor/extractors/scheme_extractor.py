@@ -13,10 +13,13 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 
-from actions import estimate_single_bond
+from utils.vectorised import estimate_single_bond
 from configs.config import Config
-from extractors.arrows import ArrowExtractor, ArrowDetector, ArrowClassifier
+from extractors.arrows import ArrowExtractor
 from extractors.unified import UnifiedExtractor
+
+from extractors.smiles import SmilesExtractor
+
 from models.base import BaseExtractor
 from reactiondataextractor.models.exceptions import NoArrowsFoundException, NoDiagramsFoundException
 from models.output import ReactionScheme, RoleProbe
@@ -34,6 +37,8 @@ class SchemeExtractor(BaseExtractor):
         :type opts: argparse.Namespace
         """
         self.opts = opts
+
+
         self.path = Path(opts.path)
 
         self._extract_single_image = False if self.path.is_dir() else True
@@ -42,6 +47,7 @@ class SchemeExtractor(BaseExtractor):
 
         self.arrow_extractor = ArrowExtractor(fig=None)
         self.unified_extractor = UnifiedExtractor(fig=None, arrows=[], use_tiler=self.opts.finegrained_search)
+        self.recogniser = DecimerRecogniser()
 
         self.scheme = None
 
@@ -64,6 +70,7 @@ class SchemeExtractor(BaseExtractor):
         if ax is None:
             f = plt.Figure(figsize=(10, 10))
             ax = f.add_axes([0, 0, 1, 1])
+        ax.imshow(self.fig.img, cmap=plt.cm.binary)
         self.arrow_extractor.plot_extracted(ax)
         self.unified_extractor.plot_extracted(ax)
         plt.show()
@@ -91,33 +98,37 @@ class SchemeExtractor(BaseExtractor):
         self.arrow_extractor.fig = fig
         self.unified_extractor.fig = fig
         estimate_single_bond(fig)
-
+            
         try:
             self.arrow_extractor.extract()
+            diags_only = False
         except NoArrowsFoundException:
-            print(f"No arrows have been found in an image ({path}). Skipping the image...")
-            return
-
+            diags_only = True
+        self.unified_extractor.diags_only = diags_only
         self.unified_extractor.all_arrows = self.arrow_extractor.arrows
         try:
             diags, conditions, labels = self.unified_extractor.extract()
         except NoDiagramsFoundException:
             print(f"No diagrams have been found in the image ({path}). Skipping the image...")
             return
+        if self.opts.visualize:
+            import matplotlib.pyplot as plt
+            self.plot_extracted()
+        
+        
+        smiles_extractor = SmilesExtractor(diags, self.recogniser)
+        smiles_extractor.extract()
+        if not diags_only:
+            probed_diags = [diag for diag in diags if not any(diag in a.children for a in self.arrow_extractor.arrows)]            
+            p = RoleProbe(fig, self.arrow_extractor.arrows, probed_diags)
+            p.probe()
 
-        # if self.opts.visualize:
-        #     self.plot_extracted()
-
-        p = RoleProbe(fig, self.arrow_extractor.arrows, diags)
-        [p.probe_around_arrow(arrow) for arrow in self.arrow_extractor.arrows]
-
-        recogniser = DecimerRecogniser()
-        for d in diags:
-            recogniser.predict_SMILES(fig, d)
-        scheme = ReactionScheme(fig, p.reaction_steps)
+            output = ReactionScheme(fig, p.reaction_steps)
+        else:
+            output = self.unified_extractor
         if self.opts.output_dir:
-            self.save_scheme_to_disk(scheme, path)
-        return scheme
+            self.save_output_to_disk(output, path)
+        return output
 
     def extract_from_dir(self):
         """Main extraction method used for extracting data from a single image"""
@@ -132,10 +143,10 @@ class SchemeExtractor(BaseExtractor):
                 schemes.append(None)
         return schemes
 
-    def save_scheme_to_disk(self, scheme, image_path):
-        """Writes the reconstructed scheme to disk
-        :param scheme: Reconstructed scheme object
-        :type scheme: ReactionScheme
+    def save_output_to_disk(self, output, image_path):
+        """Writes the reconstructed output to disk
+        :param output: Reconstructed output object
+        :type output: ReactionScheme
         :param image_path: path to the input image from which the scheme was extracted
         :type image_path: Path
         :return: None
@@ -143,4 +154,4 @@ class SchemeExtractor(BaseExtractor):
         out_name = Path(f'{image_path.stem}.json')
         outpath = self.opts.output_dir / out_name
         with open(outpath, 'w') as outfile:
-            outfile.write(scheme.to_json())
+            outfile.write(output.to_json())

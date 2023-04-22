@@ -14,7 +14,8 @@ import copy
 import numpy as np
 import cv2
 from scipy import ndimage as ndi
-
+from scipy.stats import mode
+from configs import config
 from reactiondataextractor.models.geometry import Line, Point, OpencvToSkimageHoughLineAdapter
 from reactiondataextractor.models.segments import Rect, Panel, Figure, FigureRoleEnum
 
@@ -132,9 +133,9 @@ def binary_floodfill(fig):
     return fig
 
 
-def pixel_ratio(fig, rect):
-    """ Calculates the ratio of 'on' pixels to bounding box area for a rectangular patch of `fig` bounded by `rect`.
-    if the bounding box exceeds boundary of `fig`, then area outside of `fig` is treated as if it was background (values
+def pixel_ratio(img, rect):
+    """ Calculates the ratio of 'on' pixels to bounding box area for a rectangular patch of `img` bounded by `rect`.
+    if the bounding box exceeds boundary of `img`, then area outside of `img` is treated as if it was background (values
     of 0)
     :param fig : Input binary Figure
     :param diag : Area to calculate pixel ratio
@@ -142,8 +143,9 @@ def pixel_ratio(fig, rect):
     """
      # TODO: Adjust for panels extending beyond image boundary (pad with background pixels)
 
-    cropped_img = crop_rect(fig.img, rect)
-
+    # cropped_img = crop_rect(fig.img, rect)
+    top, left, bottom, right = rect.coords
+    cropped_img = crop(img, left, right, top, bottom)
     cropped_img = cropped_img['img']
 
     ones = np.count_nonzero(cropped_img)
@@ -158,11 +160,11 @@ def pixel_ratio(fig, rect):
 #     :returns fig: Connected Figure
 #     """
 #     fig = copy.deepcopy(fig)
-#     fig.img, no_tagged = ndi.label(fig.img)
+#     fig.img, no_tagged = ndi.labels(fig.img)
 #     return fig
 
 
-def erase_elements(fig, elements):
+def erase_elements(fig, elements, copy_fig=True):
     """
     Erase elements from an image on a pixel-wise basis. if no `pixels` attribute, the function erases the whole
     region inside the bounding box. Automatically assigns roles to ccs in the new figure based on the original.
@@ -170,29 +172,32 @@ def erase_elements(fig, elements):
     :param iterable of panels elements: list of elements to erase from image
     :return: copy of the Figure object with elements removed
     """
-    temp_fig = copy.deepcopy(fig)
-
+    if copy_fig:
+        temp_fig = copy.deepcopy(fig)
+    else:
+        img_copy = copy.deepcopy(fig.img)
+        raw_img = copy.deepcopy(fig.raw_img)
+        img_detectron = copy.deepcopy(fig.img_detectron)
+        temp_fig = Figure(img=img_copy, raw_img=raw_img, img_detectron=img_detectron)
+        temp_fig._scaling_factor = fig.scaling_factor
+        
     try:
-        flattened = temp_fig.img.flatten()
-        for element in elements:
-            np.put(flattened, [pixel.row * temp_fig.img.shape[1] + pixel.col for pixel in element.pixels], 0)
-        img_no_elements = flattened.reshape(temp_fig.img.shape[0], temp_fig.img.shape[1])
-        temp_fig.img = img_no_elements
+        for panel in elements:
+            panel.mask_off(temp_fig)
+        temp_fig.set_connected_components()
 
     except AttributeError:
         for element in elements:
             temp_fig.img[element.top:element.bottom+1, element.left:element.right+1] = 0
-
-    new_fig = Figure(temp_fig.img, fig.raw_img)
-    if hasattr(fig, 'dilation_iterations'):
-        new_fig.kernel_sizes = fig.kernel_sizes
-    for cc1 in new_fig.connected_components:
-        for cc2 in fig.connected_components:
-            if cc1 == cc2:
-                cc1.role = cc2.role   # Copy roles of ccs
-
-    return new_fig
-
+            coords = [element.top, element.left, element.bottom, element.right]
+            if fig.scaling_factor:
+                scaled_element = np.rint(np.asarray(coords) / fig.scaling_factor).astype(np.int32)
+                # list(map(lambda elem: np.rint(elem/fig.scaling_factor), coords), dtype=np.int32)
+                bg_value = mode(temp_fig.img_detectron.ravel(), keepdims=False)[0]
+                temp_fig.img_detectron[scaled_element[0]:scaled_element[2]+1, scaled_element[1]:scaled_element[3]+1] = bg_value
+            else:
+                temp_fig.img_detectron = None
+    return temp_fig
 
 def dilate_fig(fig, num_iterations):
     """
@@ -203,7 +208,9 @@ def dilate_fig(fig, num_iterations):
     """
     # selem = disk(kernel_size)
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-    return Figure(cv2.dilate(fig.img, kernel, iterations=int(num_iterations)), raw_img=fig.raw_img)
+    f = cv2.dilate(fig.img, kernel, iterations=int(num_iterations))
+    f = Figure(f, raw_img=fig.raw_img)
+    return f
     # return Figure(binary_dilation(fig.img, selem), raw_img=fig.raw_img)
 
 
@@ -235,9 +242,6 @@ def is_slope_consistent(lines):
         return False
 
     return True
-
-
-
 
 
 def remove_small_fully_contained(connected_components):

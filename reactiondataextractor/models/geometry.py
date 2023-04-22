@@ -69,9 +69,9 @@ class Line:
 
     @property
     def pixels(self):
-        if self.pixels is None:
-            self.pixels = self.interpolate_pixels(*self.endpoints)
-        return self.pixels
+        if self._pixels is None:
+            self._pixels = self.interpolate_pixels(*self.endpoints)
+        return self._pixels
 
     @slope.setter
     def slope(self, value):

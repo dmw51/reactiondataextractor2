@@ -21,13 +21,13 @@ import numpy as np
 import tensorflow as tf
 import efficientnet.tfkeras as efn
 
-from DECIMER.config import get_bnw_image, delete_empty_borders, central_square_image, PIL_im_to_BytesIO
+from DECIMER.config import get_bnw_image, delete_empty_borders, central_square_image, PIL_im_to_BytesIO, get_resize, increase_contrast
 from DECIMER.decimer import tokenizer, DECIMER_V2
 
 # from DECIMER.decimer import load_trained_model, evaluate, decoder
 from models.reaction import Diagram
 from reactiondataextractor.models.segments import FigureRoleEnum, Figure
-from reactiondataextractor.utils import isolate_patches
+from utils.utils import isolate_patches
 
 log = logging.getLogger()
 # superatom_file = os.path.join(settings.ROOT_DIR, 'dict', 'superatom.txt')
@@ -45,50 +45,23 @@ class DecimerRecogniser:
         # self.temp_path = f'diag_temp.png'
         self.model = DECIMER_V2
 
-    def predict_SMILES(self, fig: Figure, diagram: Diagram) -> str:
-        """
-        This function takes a figure and a diagram inside it, and returns the SMILES
-        representation of the depicted molecule (str).
-        Args:
-            fig (Figure): Analysed reaction scheme figure
-            diagram (Diagram): diagram inside the figure
-        Returns:
-            (str): SMILES representation of the molecule in the input image
-        """
-        diag_crop = diagram.panel.create_crop(fig)
-        chemical_structure = self.decode_image(diag_crop.img_detectron)
-        predicted_tokens = self.model(chemical_structure)
-        predicted_SMILES = self.detokenize_output(predicted_tokens)
-        diagram.smiles = predicted_SMILES
+    # def predict_SMILES(self, fig: Figure, diagram: Diagram) -> str:
+    #     """
+    #     This function takes a figure and a diagram inside it, and returns the SMILES
+    #     representation of the depicted molecule (str).
+    #     Args:
+    #         fig (Figure): Analysed reaction scheme figure
+    #         diagram (Diagram): diagram inside the figure
+    #     Returns:
+    #         (str): SMILES representation of the molecule in the input image
+    #     """
+    #     diag_crop = diagram.panel.create_crop(fig)
+    #     chemical_structure = self.decode_image(diag_crop.img_detectron)
+    #     predicted_tokens = self.model(chemical_structure)
+    #     predicted_SMILES = self.detokenize_output(predicted_tokens)
+    #     diagram.smiles = predicted_SMILES
 
-        return predicted_SMILES
-    # def _recognise_diagram(self, fig, diagram):
-    #     desired_h_and_w = 299
-    #     w = diagram.panel.width
-    #     h = diagram.panel.height
-    #     pad_h = (desired_h_and_w - h)//2
-    #     pad_w = (desired_h_and_w - w)//2
-    #     if pad_h <= 0 or pad_w <= 0: # img is larger than the desired size
-    #         diag_crop = diagram.panel.create_crop(fig)
-    #         diag_crop = isolate_patches(diag_crop, [cc for cc in diag_crop.connected_components
-    #                                                 if cc.role == FigureRoleEnum.DIAGRAMPART])
-    #         img = cv2.resize(diag_crop.img, (desired_h_and_w, desired_h_and_w))
-    #     else:
-    #         pad_width = (pad_h, pad_h), (pad_w, pad_w)
-    #         diag_crop = diagram.panel.create_padded_crop(fig, pad_width)
-    #         diag_crop = isolate_patches(diag_crop, [cc for cc in diag_crop.connected_components
-    #                                         if cc.role in [FigureRoleEnum.DIAGRAMPART, FigureRoleEnum.DIAGRAMPRIOR]])
-    #         img = diag_crop.img
-    #
-    #     plt.imsave(self.temp_path, img, cmap='binary')
-    #     smiles = self.predict_SMILES(self.temp_path)
-    #     diagram.smiles = smiles
-    #     os.remove(self.temp_path)
-    #     return smiles
-
-    # def recognise_diagrams(self, fig, diagrams):
-    #     preprocessed = [self.preprocess_diagram(diag) for diag in diagrams]
-    #     temp_files = [plt.imsave(self.temp_paths(i), diag) for i, diag in zip(range(len(preprocessed)), preprocessed)]
+    #     return predicted_SMILES
 
     def decode_image(self, img: np.ndarray):
         """
@@ -99,12 +72,14 @@ class DecimerRecogniser:
             Processed image
         """
         # img = self.remove_transparent(img)
+        img = increase_contrast(img)
         img = get_bnw_image(img)
+        img = get_resize(img)
         img = delete_empty_borders(img)
         img = central_square_image(img)
         img = PIL_im_to_BytesIO(img)
         img = tf.image.decode_png(img.getvalue(), channels=3)
-        img = tf.image.resize(img, (299, 299))
+        img = tf.image.resize(img, (512, 512), method="gaussian", antialias=True)
         img = efn.preprocess_input(img)
         return img
 
@@ -163,7 +138,7 @@ class DecimerRecogniser:
 #
 #     def _tag_multiple_r_groups(self):
 #         for diag in self.diagrams:
-#             if diag.label and diag.label.r_group and len(diag.label.r_group) > 1:
+#             if diag.labels and diag.labels.r_group and len(diag.labels.r_group) > 1:
 #                 diag.r_groups = True
 #             else:
 #                 diag.r_groups = False
@@ -176,7 +151,7 @@ class DecimerRecogniser:
 #         :param extension: String indicating format of input file
 #         :param debug: Bool to indicate debugging
 #
-#         :return labels_and_smiles: List of Tuple(List of label candidates, SMILES) objects
+#         :return labels_and_smiles: List of Tuple(List of labels candidates, SMILES) objects
 #         """
 #         # Work around a dict bug which derails the process (OSRA-specific?)
 #         contents = read_contents([superatom_path, spelling_path])
@@ -198,7 +173,7 @@ class DecimerRecogniser:
 #         # label_cands = []
 #
 #         # Format the extracted rgroup
-#         for tokens in diag.label.r_group:
+#         for tokens in diag.labels.r_group:
 #             token_dict = {}
 #             for token in tokens:
 #                 token_dict[token[0].text] = token[1].text
@@ -215,7 +190,7 @@ class DecimerRecogniser:
 #         smiles = osra_rgroup.read_rgroup(osra_input, input_file=img_name, verbose=False, debug=debug,
 #                                          superatom_file=superatom_path, spelling_file=spelling_path)
 #         if not smiles:
-#             log.warning('No SMILES strings were extracted for diagram %s' % diag.tag)
+#             log.warning('No SMILES strings were extracted for diagram %s' % diag.tags)
 #
 #         if not debug:
 #             io_.imdel(img_name)
@@ -256,7 +231,7 @@ class DecimerRecogniser:
 #             print(str(e))
 #
 #         if not smile:
-#             log.warning('No SMILES string was extracted for diagram %s' % diag.tag)
+#             log.warning('No SMILES string was extracted for diagram %s' % diag.tags)
 #
 #         if not debug:
 #             io_.imdel(temp_img_fname)
@@ -271,9 +246,9 @@ class DecimerRecogniser:
 #         :returns : True if result is a false positive
 #         """
 #
-#         # label_candidates, smiles = diag.label, diag.smiles
+#         # label_candidates, smiles = diag.labels, diag.smiles
 #         smiles = diag.smiles
-#         # Remove results without a label
+#         # Remove results without a labels
 #         # if len(label_candidates) == 0:
 #         #     return True
 #
