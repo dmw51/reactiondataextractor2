@@ -472,21 +472,32 @@ def find_points_on_line(p0, t, distance):
 def lies_along_arrow_normal(arrow, obj):
     """Checks whether an object lies along arrow normal.
 
-    Fit an ellipse to arrow contour.
+    Fit an min area rectangle to arrow contour.
     Form 4 points, 2 at end of arrows (or extending a bit further), 2 extending from a line normal to the
-    arrow's bounding ellipse, and check which is closest. Reclassify as conditions if obj is closer to
+    arrow's bounding box (minimal), and check which is closest. Reclassify as conditions if obj is closer to
     a normal point"""
 
-    (x, y), (MA, ma), angle = cv2.fitEllipse(arrow.contour)
-    angle = angle - 90  # Angle should be anti-clockwise relative to +ve x-axis
+    # (x, y), (MA, ma), angle = cv2.minAreaRect(arrow.contour)
+    min_rect = cv2.minAreaRect(arrow.contour[0])
+    box_points = cv2.boxPoints(min_rect)
+    diffs = [box_points[idx+1] - box_points[idx] for idx in range(3)] + [box_points[0] - box_points[-1]]
+    box_segment_lengths = [np.sqrt(np.sum(np.power(x,2))) for x in diffs]
+    largest_idx = np.argmax(box_segment_lengths)
+    points = box_points[largest_idx], box_points[(largest_idx+1)%4]
+    x_diff = points[1][0] - points[0][0]
+    y_diff = points[1][1] - points[0][1]
+    eps  = 1e-5
+    dir_array = np.array([x_diff, y_diff])
+    direction_arrow = dir_array / np.linalg.norm(dir_array)
+    # angle = angle - 90  # Angle should be anti-clockwise relative to +ve x-axis
 
-    normal_angle = angle + 90
-    center = np.asarray([x, y])
-    direction_arrow = np.asarray([1, np.tan(np.radians(angle))])
-    direction_normal = np.asarray([1, np.tan(np.radians(normal_angle))])
-    dist = max(ma, MA) / 2
+    # normal_angle = angle + 90
+    center = np.asarray(arrow.panel.center)
+    # direction = np.asarray([1, np.tan(np.radians(angle))])
+    direction_normal = np.asarray([-1*direction_arrow[1], direction_arrow[0]])
+    dist = box_segment_lengths[largest_idx] / 2
     p_a1, p_a2 = find_points_on_line(center, direction_arrow, distance=dist * 1.5)
-    p_n1, p_n2 = find_points_on_line(center, direction_normal, distance=dist * 0.5)
+    p_n1, p_n2 = find_points_on_line(center, direction_normal, distance=dist * .5)
     closest_pt = min([p_a1, p_a2, p_n1, p_n2], key=lambda pt: obj.center_separation(pt))
     ## Visualize created points
     # import matplotlib.pyplot as plt

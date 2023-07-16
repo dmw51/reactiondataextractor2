@@ -24,7 +24,7 @@ from models.base import BaseExtractor
 from reactiondataextractor.models.exceptions import NoArrowsFoundException, NoDiagramsFoundException
 from models.output import ReactionScheme, RoleProbe
 from processors import ImageReader, ImageScaler, ImageNormaliser, Binariser
-from recognise import DecimerRecogniser
+# from recognise import DecimerRecogniser
 
 
 class SchemeExtractor(BaseExtractor):
@@ -47,7 +47,7 @@ class SchemeExtractor(BaseExtractor):
 
         self.arrow_extractor = ArrowExtractor(fig=None)
         self.unified_extractor = UnifiedExtractor(fig=None, arrows=[], use_tiler=self.opts.finegrained_search)
-        self.recogniser = DecimerRecogniser()
+        # self.recogniser = DecimerRecogniser()
 
         self.scheme = None
 
@@ -116,14 +116,14 @@ class SchemeExtractor(BaseExtractor):
             self.plot_extracted()
         
         
-        smiles_extractor = SmilesExtractor(diags, self.recogniser)
-        smiles_extractor.extract()
+        # smiles_extractor = SmilesExtractor(diags, self.recogniser)
+        # smiles_extractor.extract()
         if not diags_only:
-            probed_diags = [diag for diag in diags if not any(diag in a.children for a in self.arrow_extractor.arrows)]            
-            p = RoleProbe(fig, self.arrow_extractor.arrows, probed_diags)
+            # probed_diags = [diag for diag in diags if not any(diag in a.children for a in self.arrow_extractor.arrows)]            
+            p = RoleProbe(fig, self.arrow_extractor.arrows, diags)
             p.probe()
 
-            output = ReactionScheme(fig, p.reaction_steps)
+            output = ReactionScheme(fig, p.reaction_steps, p.is_incomplete)
         else:
             output = self.unified_extractor
         if self.opts.output_dir:

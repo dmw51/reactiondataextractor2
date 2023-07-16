@@ -9,7 +9,7 @@ class Config:
     ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
     IMG_PATH = None
     HOME = os.path.expanduser('~')
-    TESSDATA_PATH = f'../tessdata'
+    TESSDATA_PATH = f'/home/damian/Desktop/reactiondataextractor2/tessdata'
     SINGLE_BOND_LENGTH = 1.54
 
 
@@ -21,7 +21,11 @@ class ExtractorConfig(Config):
     # Whether to use cpu or gpu to run deep models
     DEVICE = 'cpu'  ## 'cpu' or 'cuda'
     # Path to the arrow detector weights
-    ARROW_DETECTOR_PATH = os.path.join(Config.ROOT_DIR, '../models/cnn_weights/torch_arrow_detector_resnet18.pt')
+    # ARROW_DETECTOR_PATH = os.path.join(Config.ROOT_DIR, '../models/cnn_weights/torch_arrow_detector_resnet18.pt')
+    # ARROW_DETECTOR_PATH = os.path.join('/home/damian/Downloads/torch_arrow_detector_classifier_combined_resnet18.pt')
+    ARROW_DETECTOR_PATH = os.path.join('/home/damian/Downloads/torch_arrow_detector_classifier_combined_resnet18v3.pt')
+
+
     # Path to the arrow classifier weights
     ARROW_CLASSIFIER_PATH = os.path.join(Config.ROOT_DIR, '../models/cnn_weights/torch_arrow_classifier.pt')
     # Shape of an arrow image fed to the detector model
@@ -37,7 +41,9 @@ class ExtractorConfig(Config):
     # Threshold - maximum area of a contour wrt the total bbox area (selects sparse boxes)
     CURLY_ARROW_CNT_AREA_TO_BBOX_AREA_RATIO = 0.3
     # Arrow detection threshold (classification)
-    ARROW_DETECTOR_THRESH = 0.95
+    # ARROW_DETECTOR_THRESH = 0.95
+    ARROW_DETECTOR_THRESH = 0.7
+
 
     # Path to the main object detection model
     UNIFIED_EXTR_MODEL_WT_PATH = os.path.join(Config.ROOT_DIR,
@@ -57,7 +63,7 @@ class ExtractorConfig(Config):
     # Maximum dimensions of tile patches
     TILER_MAX_TILE_DIMS = (600, 800)
     # Distance for classifying diagrams as part of a conditions region around the arrow
-    ARROW_DIAG_MAX_DISTANCE = 50
+    ARROW_DIAG_MAX_DISTANCE = 80
     # Distance used to crop an image around diagrams to compute appropriate dilation parameters
     DIAG_DILATION_EXT = 50
     # Maximum diagram area relative to total image area
@@ -73,7 +79,7 @@ class ExtractorConfig(Config):
 
 class ProcessorConfig(Config):
     # Image binarisation thresholds
-    BIN_THRESH = [40, 255]
+    BIN_THRESH = [70, 255]
     CANNY_THRESH = [50, 100]
 
 

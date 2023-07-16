@@ -105,7 +105,7 @@ def estimate_single_bond(fig):
     approx_line_lengths = []
     # estimation_fig = isolate_patches(fig, ccs[:3])
     biggest_cc = ccs[0]
-    length_scan_param = 0.1 * min(biggest_cc.width, biggest_cc.height)
+    length_scan_param = 0.05 * min(biggest_cc.width, biggest_cc.height)
     pixel_masks = []
     for cc in estimation_ccs:
         pixel_mask = np.zeros_like(fig.img)

@@ -11,7 +11,7 @@ email: dmw51@cam.ac.uk
 """
 import copy
 from abc import ABC, abstractmethod
-from collections import Counter
+from collections import Counter, namedtuple
 from collections.abc import Iterable
 
 import cv2
@@ -22,12 +22,12 @@ from sklearn.cluster import DBSCAN
 
 from reactiondataextractor.models.exceptions import SchemeReconstructionFailedException
 from reactiondataextractor.models.geometry import Line
-from reactiondataextractor.models.reaction import Diagram, ReactionStep, CurlyArrow
+from reactiondataextractor.models.reaction import Diagram, ReactionStep, CurlyArrow, Conditions
 from reactiondataextractor.models.segments import ReactionRoleEnum, Rect, Figure
 from reactiondataextractor.configs.config import SchemeConfig
 from reactiondataextractor.utils.utils import find_points_on_line, euclidean_distance, skeletonize
 
-
+ConditionsPlaceholder = namedtuple('ConditionsPlaceholder', ['panel', 'text', 'conditions_dct'])
 class Graph(ABC):
     """Generic directed graph class
     """
@@ -98,7 +98,7 @@ class Graph(ABC):
 class ReactionScheme(Graph):
     """Main class used for representing the output of an extraction process
     """
-    def __init__(self, fig, reaction_steps):
+    def __init__(self, fig, reaction_steps, is_incomplete):
         """param fig: Analysed figure
         :type fig: Figure
         :param reaction_steps: all found reaction steps
@@ -106,6 +106,7 @@ class ReactionScheme(Graph):
         super().__init__()
         self.included_diags = []
         self._reaction_steps = reaction_steps
+        self.is_incomplete = is_incomplete
         self.create_graph()
         # self._start = None  # start node(s) in a graph
         # self._end = None   # end node(s) in a graph
@@ -219,14 +220,16 @@ class ReactionScheme(Graph):
         """
 
         for step in self._reaction_steps:
+            conditions = step.conditions if step.conditions != [] else [ConditionsPlaceholder(panel=step.arrow.panel, text='', conditions_dct=None)]
             self.add_node(step.reactants)
-            self.add_node(step.conditions)
+            self.add_node(conditions)
             self.add_node(step.products)
 
 
         for step in self._reaction_steps:
-            self._generate_edge(step.reactants, step.conditions)
-            self._generate_edge(step.conditions, step.products)
+            conditions = step.conditions if step.conditions != [] else [ConditionsPlaceholder(panel=step.arrow.panel, text='', conditions_dct=None)]
+            self._generate_edge(step.reactants, conditions)
+            self._generate_edge(conditions, step.products)
 
     def set_start_end_nodes(self):
         """
@@ -276,7 +279,8 @@ class ReactionScheme(Graph):
                     node_dcts.append(element.conditions_dct)
             nodes.append(node_dcts)
         json_dct = {'adjacency': adjacency,
-                    'nodes': nodes}
+                    'nodes': nodes,
+                    'is_incomplete': self.is_incomplete}
 
         return json.dumps(json_dct, indent=4)
 
@@ -296,14 +300,27 @@ class RoleProbe:
         """
         self.fig = fig
         self.arrows = arrows
-        self.diagrams = diagrams
+        probed_diags = self.remove_reaction_conditions_diags(diagrams)
+        self.diagrams = probed_diags
 
-        self.stepsize = min([x for diag in self.diagrams for x in (diag.panel.width, diag.panel.height)]) * 0.4 #Step size should be related to width/height of the smallest diagram, whichever is smaller
+        self.stepsize = min([x for diag in self.diagrams for x in (diag.panel.width, diag.panel.height)]) * 0.2 #Step size should be related to width/height of the smallest diagram, whichever is smaller
         # Could also be a function depending on arrow direction, but might not be necessary
         self.segment_length = np.mean([(d.panel.width + d.panel.height) / 2 for d in self.diagrams]) // 2
         # This should be comparable to the largest dim of the largest diagrams, but might not be
                                 # stable to outliers
         self.reaction_steps = []
+        self.is_incomplete = False
+
+    def remove_reaction_conditions_diags(self, diags):
+        cond_diags = []
+        for arrow in self.arrows:
+            for child in arrow.children:
+                if isinstance(child, Diagram):
+                    cond_diags.append(child)
+                elif isinstance(child, Conditions):
+                    if child.diags:
+                        cond_diags.extend(child.diags)
+        return [diag for diag in diags if diag not in cond_diags]  
 
     def probe(self):
         unique_arrows = []
@@ -346,7 +363,8 @@ class RoleProbe:
                                                 switch=+1)
             
             if not (diags_react and diags_prod):
-                raise SchemeReconstructionFailedException
+                self.is_incomplete = True
+                return
             
         else:
             x_one, y_one = arrow.center
@@ -362,6 +380,8 @@ class RoleProbe:
 
             if diags_one and diags_two:
                 single_line = True
+                diags_react, diags_prod = self.assign_diags(diags_one, diags_two, arrow)
+
                 
             else: ### If no diags were found on one side of an arrow, assume, they can be
                 # found in the previous or next row of the reaction
@@ -375,18 +395,20 @@ class RoleProbe:
                     diags_two = diags_two if diags_two else self._search_elsewhere(where=search_direction, arrow=arrow,
                                                                                 direction=direction, direction_normal=direction_normal,
                                                                                 switch=+1)
-                except IndexError:
+                    if diags_one and diags_two:
+                        diags_react, diags_prod = self.assign_diags(diags_one, diags_two, arrow, multiline=True)
+                    
+                except IndexError or ValueError:
                     return
                 single_line = False
                 
                 if not (diags_one and diags_two):
-                    raise SchemeReconstructionFailedException
-                
-            diags_react, diags_prod = self.assign_diags(diags_one, diags_two, arrow)
+                    self.is_incomplete = True
+                    return                
             
         self.reaction_steps.append(ReactionStep(arrow, reactants=diags_react, products=diags_prod, single_line=single_line))
 
-    def assign_diags(self, group1, group2, arrow):
+    def assign_diags(self, group1, group2, arrow, multiline=False):
         """Assigns the two groups as either reactants or products based on their proximity to the arrow centre
         vs. their proximity to arrow's centre of mass.
 
@@ -399,16 +421,46 @@ class RoleProbe:
         :return: the same groups classified as either reactants or products
         :rtype: tuple[list[Diagram]]"""
         ref_point = arrow.reference_pt # arrow's center of mass which denoted the products' side
+        arrow_center = arrow.panel.center
         groups = [group1, group2]
 
-        def compute_ref_group_dist(group):
-            """Compute distance between reference point and edge of the closest bouding box in a group"""
-            return min(bbox.edge_separation(ref_point) for bbox in group)
+        def compute_arrow_group_dist_change(group):
+            """Compute two distances: one between the midpoint and the group of bounding boxes,
+            then betwen the reference point (cente of mass of an arrow). Thes subtract the two values.
+            The distance in these two scenarios will decrease for the product group, and increase for the reactant group"""
+            dist_center = min(bbox.edge_separation(arrow_center) for bbox in group)
+            dist_ref_point = min(bbox.edge_separation(ref_point) for bbox in group)
+            return dist_ref_point - dist_center
+        
+        def compute_arrow_group_dist(group):
+            """Compute two distances: one between the midpoint and the group of bounding boxes,
+            then betwen the reference point (cente of mass of an arrow). Thes subtract the two values.
+            The distance in these two scenarios will decrease for the product group, and increase for the reactant group"""
+            return  min(bbox.edge_separation(arrow_center) for bbox in group)
+        
+        if not multiline:
+            prod_group = min(groups, key=compute_arrow_group_dist_change)
+            groups.remove(prod_group)
+            react_group = groups[0]
+            return react_group, prod_group
+        else:
+            closer = min(groups, key=compute_arrow_group_dist)
+            ref_center_dist_diff = compute_arrow_group_dist_change(closer)
+            prod_group = None
+            react_group = None
+            if ref_center_dist_diff < 0:
+                prod_group = closer
+            else:
+                react_group = closer
+            groups.remove(closer)
+            if react_group is None:
+                react_group = groups[0]
+            else:
+                prod_group = groups[0]
+            return react_group, prod_group
 
-        prod_group = min(groups, key=compute_ref_group_dist)
-        groups.remove(prod_group)
-        react_group = groups[0]
-        return react_group, prod_group
+    
+        
     
     def _compute_scan_direction_curly_arrow(self, curly_arrow):
         temp_fig = Figure(np.zeros_like(self.fig.img), self.fig.img)
@@ -418,14 +470,14 @@ class RoleProbe:
         selected_px = self._select_arrow_ends(temp_fig)
         
         top, left = curly_arrow.panel.top, curly_arrow.panel.left
-        selected_px = [(px[0]+top, px[1]+left) for px in selected_px]
+        selected_px = [(px[0]+left, px[1]+top) for px in selected_px]
 
         pairs = []
         for px in selected_px:
-            y, x = px
+            x, y = px
             temp_rect = Rect((y,x,y,x)) 
             closest_diag = min(self.diagrams, key=lambda diag: diag.panel.edge_separation(temp_rect))
-            if closest_diag.panel.edge_separation(temp_rect) < curly_arrow.panel.width * 0.5:
+            if closest_diag.panel.edge_separation(temp_rect) < curly_arrow.panel.width * 0.3:
                 pairs.append((px, closest_diag))
                 
         reactant_ends = []
@@ -433,10 +485,10 @@ class RoleProbe:
         EXTENSION = max(25, int(curly_arrow.panel.area*3*10e-5))
         for pair in pairs:
             px, _ = pair
-            top = px[0] - EXTENSION
-            bottom = px[0] + EXTENSION
-            left = px[1] - EXTENSION
-            right = px[1] + EXTENSION
+            top = px[1] - EXTENSION
+            bottom = px[1] + EXTENSION
+            left = px[0] - EXTENSION
+            right = px[0] + EXTENSION
             crop = self.fig.img[top:bottom, left:right]
             cnt, _ = cv2.findContours(crop, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE )
             cnt = max(cnt, key= lambda contour: cv2.contourArea(contour))
@@ -475,105 +527,20 @@ class RoleProbe:
         scan_params = []
         for pair in selected_ends:
             point, diag = pair
-            y1, x1  = point
+            x1, y1  = point
             x2, y2 = diag.panel.center
             if x2 - x1 == 0:
                 direction = [0, (y2-y1)/np.abs(y2-y1)]
             else:
                 direction = np.asarray([(x2-x1)/np.abs(x2-x1), (x2-x1)/np.abs(x2-x1) * (y2-y1)/(x2-x1)])
                 direction = direction / np.linalg.norm(direction)
-                point = (point[1], point[0])
+                # point = (point[1], point[0])
             scan_params.append((point, direction))
             
         return scan_params
             
 
-    # def resolve_nodes(self):
-    #     # """Looks for inconsistent diagram nodes and fixes them.
-    #     #
-    #     #  Diagram nodes are symmetric in that if diagrams take part in an intermediate step, all constructed nodes
-    #     #  associated with this group should contain the same number of diagrams. If something goes wrong, we choose a
-    #     #  minimal node to replace all the nodes associated with this diagram group. A minimal node is defined
-    #     #  as a list of diagrams of smallest length common to a group of nodes. For example, if three nodes contain diagrams
-    #     #  [A, B], [A,B] and [A, B, C], we choose [A, B] as the minimal node and replace the three nodes as [A,B] thus
-    #     #  fixing the third node"""
-    #     # nodes = [(node, step_idx) for (step_idx, step) in enumerate(self.reaction_steps) for node in (step.nodes[0], step.nodes[2])]
-    #     # getter = itemgetter(0)
-    #     # not_yet_grouped = set(list(range(len(nodes))))
-    #     # groups = []
-    #     # idx1 = 0
-    #     # while idx1 <= len(nodes) - 1:
-    #     #     if idx1 not in not_yet_grouped:
-    #     #         idx1 += 1
-    #     #         continue
-    #     #     group = [nodes[idx1]]
-    #     #     not_yet_grouped.remove(idx1)
-    #     #     for idx2 in range(len(nodes)):
-    #     #         node_intersection = set(getter(nodes[idx1])).intersection(set(getter(nodes[idx2])))
-    #     #         if idx2 in not_yet_grouped and node_intersection:
-    #     #             group.append(nodes[idx2])
-    #     #             not_yet_grouped.remove(idx2)
-    #     #     groups.append(group)
-    #     #     idx1 += 1
-    #     #
-    #     # for group in groups:
-    #     #     if len(group) > 2:
-    #     #         min_node = min(group, key=len)
-    #     #         min_node, idx = min_node
-    #     #         for node, step_idx in group:
-    #     #             step = self.reaction_steps[step_idx]
-    #     #             for step_node in step.nodes:
-    #     #                 if set(step_node).intersection(set(min_node)):
-    #     #                     step_node = min_node
-    #     # return groups
-    #
-    #     def compute_smallest_non_self_distance(panel1, panels):
-    #         """Computes smallest distance between panel1 and a panel inside panels, after potentially excluding
-    #         panel1 from panels"""
-    #         panels = copy.copy(panels)
-    #         if panel1 in panels:
-    #             panels.remove(panel1)
-    #
-    #         return min([panel1.edge_separation(p) for p in panels])
-    #
-    #     # for step in self.reaction_steps:
-    #     for diag in self.diagrams:
-    #         for step in diag.reaction_steps:
-    #             if not step.single_line: ## Do not use the criteria if step is spread across multiple lines
-    #                 continue
-    #
-    #             if diag in step.reactants:
-    #                 group = step.reactants
-    #             else:
-    #                 group = step.products
-    #             group_copy = group + [step.arrow]
-    #             min_dist = compute_smallest_non_self_distance(diag, group_copy)
-    #             if min_dist > SchemeConfig.MAX_GROUP_DISTANCE:
-    #                 group.remove(diag)
-    #                 diag.reaction_steps.remove(step)
-    #                 # TEST THIS - Is this working??????
-    #         # groups = [reaction_step.reactants if diag in reaction_step.reactants else reaction_step.products for
-    #         #           reaction_step in diag.reaction_steps]
-    #         # arrows = [step.arrow for step in diag.reaction_steps]
-    #         # groups = [list(g)+[a] for g,a in zip(groups, arrows)]
-    #         # min_dists = [compute_smallest_non_self_distance(diag, group ) for group in groups]
-    #         # # dists = [diag.panel.edge_separation(arrow) for arrow in arrows]
-    #         # print(min_dists)
 
-    # def visualize_steps(self):
-    #     canvases = [step.visualize(self.fig) for step in self.reaction_steps]
-    #     _Y_SEPARATION = 50
-    #     out_canvas_height = np.sum([c.shape[0] for c in canvases]) + _Y_SEPARATION * (len(canvases) - 1)
-    #     out_canvas_width = np.max([c.shape[1] for c in canvases])
-    #     out_canvas = np.zeros([out_canvas_height, out_canvas_width])
-    #     y_end = 0
-    #     for canvas in canvases:
-    #         h, w = canvas.shape
-    #         out_canvas[y_end:y_end+h, 0:0+w] = canvas
-    #         y_end += h + _Y_SEPARATION
-    #
-    #     plt.imshow(out_canvas)
-    #     plt.show()
 
     def _search_elsewhere(self, where, arrow, direction, direction_normal, switch):
         """
@@ -600,7 +567,7 @@ class RoleProbe:
         diags = self.diagrams
 
         X = np.array([s.center[1] for s in diags] + [arrow.panel.center[1]]).reshape(-1, 1)  # the y-coordinate
-        eps = np.mean([s.height for s in diags])
+        eps = np.mean([s.height for s in diags])*0.75
         dbscan = DBSCAN(eps=eps, min_samples=2)
         y = dbscan.fit_predict(X)
         num_labels = max(y) - min(y) + 1  # include outliers (labels -1) if any
@@ -687,72 +654,32 @@ class RoleProbe:
 
         return overlap
     
-    def _check_proximity(self, point, panel, prox_dist=50):
+    def _check_proximity(self, point, panel, prox_dist=50, edge=True):
         """Checks proximity between a point and a panel"""
         x, y = point
         temp_rect = Rect((y,x,y,x))
-        return panel.edge_separation(temp_rect) < prox_dist
-
+        if edge:
+            return panel.edge_separation(temp_rect) < prox_dist
+        else: 
+            return panel.center_separation(temp_rect) < prox_dist
+    
     def _compute_arrow_scan_params(self, arrow):
-        (x, y), (MA, ma), angle = cv2.fitEllipse(arrow.contour)
-        angle = angle - 90  # Angle should be anti-clockwise relative to +ve x-axis
-        normal_angle = angle + 90
-        # center = np.asarray([x, y])
-        direction = np.asarray([1, np.tan(np.radians(angle))])
-        if abs(np.around(angle, -1)) == 90 or abs(np.around(angle, -1)) == 270: ## Manually fix around tan discontinuities
-            direction = np.asarray([0, 1])
-        direction = direction / np.linalg.norm(direction)
-        direction_normal = np.asarray([1, np.tan(np.radians(normal_angle))])
-        direction_normal = direction_normal / np.linalg.norm(direction_normal)
+        min_rect = cv2.minAreaRect(arrow.contour[0])
+        box_points = cv2.boxPoints(min_rect)
+        diffs = [box_points[idx+1] - box_points[idx] for idx in range(3)] + [box_points[0] - box_points[-1]]
+        box_segment_lengths = [np.sqrt(np.sum(np.power(x,2))) for x in diffs]
+        largest_idx = np.argmax(box_segment_lengths)
+        points = box_points[largest_idx], box_points[(largest_idx+1)%4]
+        x_diff = points[1][0] - points[0][0]
+        y_diff = points[1][1] - points[0][1]
+        dir_array = np.array([x_diff, y_diff])
+        direction_arrow = dir_array / np.linalg.norm(dir_array)
 
-        return direction, direction_normal
+        direction_normal = np.asarray([-1*direction_arrow[1], direction_arrow[0]])
+
+        return direction_arrow, direction_normal
 
 
-    # def _perform_line_scan(self, arrow, region_dims, start_point, direction, direction_normal, switch):
-    #     # assert switch in [-1, 1]
-    #     region_x_length, region_y_length = region_dims
-    #     epsilon = 1e-5  # Avoid division by 0
-    #     stepsize_x = max(self.stepsize * direction[0], epsilon, key=lambda x: abs(x))
-    #     stepsize_y = max(self.stepsize * direction[1], epsilon, key=lambda x: abs(x))
-    #     num_centers_x = abs(region_x_length // stepsize_x)
-    #     num_centers_y = abs(region_y_length // stepsize_y)
-    #     num_centers = int(min(num_centers_x, num_centers_y))
-    #     if num_centers == 0:  # Handles a case where no line scan can be performed because the arrow lies close to
-    #                           # image boundary (and no diagrams are present on this boundary)
-    #         return []
-    #     deltas = np.array([[stepsize_x * n, stepsize_y * n] for n in range(1, num_centers + 1)])
-    #     deltas = deltas * switch
-    #     centers = start_point + deltas
-    #     lines = [Line(find_points_on_line(center, direction_normal, distance=self.segment_length))
-    #                  for center in centers]
-
-    #     # Visualize lines ##
-    #     # import matplotlib.pyplot as plt
-    #     # plt.imshow(self.fig.img)
-    #     # for line in lines:
-    #     #     (x1, y1), (x2, y2) = line.endpoints
-    #     #     plt.plot([x1, x2], [y1, y2], c='r')
-    #     # plt.show()
-
-    #     try:
-    #         other_arrows = copy.copy(self.arrows)
-    #         other_arrows.remove(arrow)
-    #         arrow_overlap = [any(self._check_overlap(l, a.panel) for a in other_arrows) for l in lines].index(True)
-    #     except ValueError:
-    #         arrow_overlap = None
-
-    #     if arrow_overlap is not None and arrow_overlap > 2: ### Remove further lines, unless two arrows are
-    #         # neighbouring one another
-    #         lines = lines[:arrow_overlap]
-    #     diags = []
-
-    #     for l in lines:
-    #         for d in self.diagrams:
-    #             if self.sufficient_overlap(l, d.panel):
-    #                 diags.append(d)
-    #     diags = list(set(diags))
-
-    #     return diags
 
     def _perform_scan(self, arrow, region_dims, start_point, direction, switch):
         # assert switch in [-1, 1]
@@ -768,6 +695,12 @@ class RoleProbe:
             return []
         deltas = np.array([[stepsize_x * n, stepsize_y * n] for n in range(1, num_centers + 1)])
         deltas = deltas * switch
+        start_offset_required = max(arrow.width, arrow.height) / 2
+        num_steps_required = int(start_offset_required / max(stepsize_x, stepsize_y))
+        try:
+            start_point = start_point + deltas[num_steps_required+1]
+        except IndexError:
+            pass
         points = start_point + deltas
         # lines = [Line(find_points_on_line(center, direction_normal, distance=self.segment_length))
         #              for center in centers]
@@ -775,26 +708,27 @@ class RoleProbe:
         # Visualize lines ##
         # import matplotlib.pyplot as plt
         # plt.imshow(self.fig.img)
-        # for line in lines:
-        #     (x1, y1), (x2, y2) = line.endpoints
-        #     plt.plot([x1, x2], [y1, y2], c='r')
+        # for p in points:
+        #     plt.scatter(*p, c='r')
         # plt.show()
 
         try:
             other_arrows = copy.copy(self.arrows)
             other_arrows.remove(arrow)
-            arrow_overlap = [any(self._check_proximity(p, a.panel) for a in other_arrows) for p in points].index(True)
+            prox_dist = min(max(stepsize_x, stepsize_y) * 4, 50)
+            arrow_overlap = [any(self._check_proximity(p, a.panel, max(max(a.panel.width, a.panel.height) * 0.2, prox_dist)) for a in other_arrows) for p in points].index(True)
         except ValueError:
             arrow_overlap = None
 
-        if arrow_overlap is not None and arrow_overlap > 2: ### Remove further lines, unless two arrows are
-            # neighbouring one another
+        if arrow_overlap is not None and arrow_overlap >= 2: 
             points = points[:arrow_overlap]
         diags = []
 
+        probe_dist = np.mean([max(a.panel.width, a.panel.height) for a in other_arrows]) * 0.3
+        probe_dist = max(50, probe_dist)
         for p in points:
             for d in self.diagrams:
-                if self._check_proximity(p, d.panel, 50):
+                if self._check_proximity(p, d.panel, probe_dist):
                     diags.append(d)
         diags = list(set(diags))
 
@@ -842,26 +776,38 @@ class RoleProbe:
     def _select_arrow_ends(self, fig):
         img = fig.img
         h, w = img.shape
-        h_crop, w_crop = int(0.1*h), int(0.1*w)
-        crop_1 = img[:h_crop, :w_crop]
-        crop_2 = img[:h_crop, w-w_crop:]
-        crop_3 = img[h-h_crop:, :w_crop]
-        crop_4 = img[h-h_crop:, w-w_crop:]
+        h_crop, w_crop = max(int(0.05*h),5), max(int(0.05*w),5)
+        crop_1 = img[:h_crop, :]
+        crop_2 = img[-1*h_crop:, :]
+        crop_3 = img[:, :w_crop]
+        crop_4 = img[:, -1*w_crop:]
         crops = [crop_1, crop_2, crop_3, crop_4]
-        padded_crops = list(map(lambda x: np.pad(x, 5, constant_values=0), crops))
+        # padded_crops = list(map(lambda x: np.pad(x, 5, constant_values=0), crops))
         selected_px = []
+        crops_on_px = []
         for crop in crops:
-            x,y = np.nonzero(crop)
+            y, x = np.nonzero(crop)
             if not (x.shape[0]== 0 or y.shape[0] == 0):
-                selected_px.append((x[0], y[0]))
+            
+                crops_on_px.append(list(zip(*(y,x))))
             else:
-                selected_px.append(None)
+                crops_on_px.append(None)
+        if crops_on_px[1] is not None:
+            crops_on_px[1] = crops_on_px[1][::-1]
+            
+        if crops_on_px[3] is not None:
+            crops_on_px[3] = crops_on_px[3][::-1]
+        #Select on_pixels closest to each image boundary
+        selected_px = [on_px_list[0] for on_px_list in crops_on_px]
+        selected_px = [[px[1], px[0]] for px in selected_px]
         selected_px[0] = selected_px[0] if selected_px[0] else None
-        selected_px[1] = (selected_px[1][0], selected_px[1][1] + (w-w_crop)) if selected_px[1] else None
-        selected_px[2] = (selected_px[2][0] + (h-h_crop), selected_px[2][1]) if selected_px[2] else None
-        selected_px[3] = (selected_px[3][0] + (h-h_crop), selected_px[3][1] + (w-w_crop)) if selected_px[3] else None
-        ## TODO: Filter selected_px using padded crops - whether they're endpoints or not
+        selected_px[1] = (selected_px[1][0],  selected_px[1][1] +  (h-h_crop)) if selected_px[1] else None
+        selected_px[2] = (selected_px[2][0], selected_px[2][1]) if selected_px[2] else None
+        selected_px[3] = (selected_px[3][0]+ (w-w_crop), selected_px[3][1] ) if selected_px[3] else None
         
         selected_px = [p for p in selected_px if p is not None]
-        
-        return selected_px
+        pruned_px = []
+        for px1 in selected_px:
+            if all([euclidean_distance(px1, p) > max(w,h)*0.3 for p in pruned_px]):
+                pruned_px.append(px1)
+        return pruned_px

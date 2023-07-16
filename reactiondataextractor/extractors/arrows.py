@@ -29,7 +29,29 @@ from reactiondataextractor.processors import Isolator
 
 log = logging.getLogger('arrows')
 from torchvision.models import resnet18
-from torch.nn import Sequential, Linear, Sigmoid
+from torch.nn import Sequential, Linear, Sigmoid, Softmax, Module
+
+class StepwiseClassifier(Module):
+  def __init__(self, in_features):
+    super().__init__()
+    self.linear_1 = Linear(in_features=in_features, out_features=128)
+    self.linear_out_binary = Linear(in_features=128, out_features=1)
+    self.linear_2 = Linear(in_features=128, out_features=128)
+    self.classifier_1 = Sigmoid()
+
+    self.linear_3 = Linear(in_features=128, out_features=128)
+    self.linear_4 = Linear(in_features=128, out_features=5)
+    self.softmax = Softmax(dim=-1)
+  def forward(self, x):
+    x = self.linear_1(x)
+    x_out_step = self.linear_out_binary(x)
+    x_out_step = self.classifier_1(x_out_step)
+    x = self.linear_2(x)
+    x = self.linear_3(x)
+    x = self.linear_4(x)
+    x = self.softmax(x)
+    return x_out_step, x
+# model.fc = Sequential(*[Linear(in_features=512, out_features=128), Linear(in_features=128, out_features=5), Softmax(dim=-1)])
 
 class ArrowExtractor(BaseExtractor):
     """Main arrow extractor class combining the different elements of the arrow extraction process"""
@@ -44,20 +66,35 @@ class ArrowExtractor(BaseExtractor):
         # self.arrow_classifier = load_model(ExtractorConfig.ARROW_CLASSIFIER_PATH)
 
         # self.arrow_detector = load(ExtractorConfig.ARROW_DETECTOR_PATH, map_location=device('cpu'))
+        
+        # self.arrow_detector = resnet18()
+        # self.arrow_detector.fc = Sequential(*[Linear(in_features=512, out_features=1), Sigmoid()])
+        # self.arrow_detector.load_state_dict(load(ExtractorConfig.ARROW_DETECTOR_PATH, map_location=device('cpu')))
+        # self.arrow_detector.eval()
+        # self.arrow_classifier = load(ExtractorConfig.ARROW_CLASSIFIER_PATH, map_location=device('cpu'))
+        # self.arrow_classifier.eval()
+        
         self.arrow_detector = resnet18()
-        self.arrow_detector.fc = Sequential(*[Linear(in_features=512, out_features=1), Sigmoid()])
+        # self.arrow_detector.fc = Sequential(*[Linear(in_features=512, out_features=5), Softmax(-1)])
+        self.arrow_detector.fc = StepwiseClassifier(512)
+
         self.arrow_detector.load_state_dict(load(ExtractorConfig.ARROW_DETECTOR_PATH, map_location=device('cpu')))
         self.arrow_detector.eval()
-        self.arrow_classifier = load(ExtractorConfig.ARROW_CLASSIFIER_PATH, map_location=device('cpu'))
-        self.arrow_classifier.eval()
+
+        
         self.arrow_detector.to(ExtractorConfig.DEVICE)
-        self.arrow_classifier.to(ExtractorConfig.DEVICE)
+        # self.arrow_classifier.to(ExtractorConfig.DEVICE)
 
         self.arrows = None
         self._class_dict = {0: SolidArrow,
                             1: EquilibriumArrow,
                             2: ResonanceArrow,
                             3: CurlyArrow
+                            }
+        self._class_dict = {1: SolidArrow,
+                            2: EquilibriumArrow,
+                            3: ResonanceArrow,
+                            4: CurlyArrow
                             }
         self._solid_arrows = []
         self._eq_arrows = []
@@ -86,13 +123,24 @@ class ArrowExtractor(BaseExtractor):
         # arrows = self.remove_duplicates(line_arrow_proposals + curly_arrow_proposals)
 
         # arrows = self.filter_false_positives(arrows)
-        arrows = self.filter_false_positives(self.fig.connected_components)
-        
+        # arrows = 
+        # arrow_cands = self.fig.connected_components[:]
+        len_ccs = len(self.fig.connected_components)
+        equilibrium_arrow_cands = []
+        for idx1 in range(len_ccs-1):
+        # self.fig.connected_components:
+            cc1 = self.fig.connected_components[idx1]
+            closest = min(self.fig.connected_components[idx1+1:], key=lambda cc2: cc1.center_separation(cc2))
+            if cc1.edge_separation(closest) < 40:
+                candidate = Panel.create_megapanel([cc1,closest], fig=cc1.fig)
+                equilibrium_arrow_cands.append(candidate)
+        solid_arrows, eq_arrows, res_arrows,  curly_arrows = self.filter_false_positives([self.fig.connected_components, equilibrium_arrow_cands])
+
         # out = demo.plot_selected_arrow_candidates(out, arrows)
         # demo.savefig('extracted_arrows.png')
         # plt.show()
         # plot_arrow_candidates(self.fig, arrows)
-        solid_arrows, eq_arrows, res_arrows,  curly_arrows = self.reclassify(arrows)
+        # solid_arrows, eq_arrows, res_arrows,  curly_arrows = self.reclassify(arrows)
         # curly_arrows = self.validate_curly_arrows(curly_arrows)
         self._solid_arrows = solid_arrows
         self._eq_arrows = eq_arrows
@@ -138,7 +186,10 @@ class ArrowExtractor(BaseExtractor):
         return filtered
 
     def filter_false_positives(self, arrows):
-        arrow_crops = [self.preprocess_model_input(arrow) for arrow in arrows]
+        arrows, eq_arrows = arrows
+        idx_last_arrows = len(arrows)
+        all_arrows = arrows + eq_arrows
+        arrow_crops = [self.preprocess_model_input(arrow) for arrow in all_arrows]
         arrow_crops = [np.concatenate(3*[x], axis=0) for x in arrow_crops]
         arrow_crops = np.stack(arrow_crops, axis=0)
         print(f'number of potential arrow crops: {len(arrow_crops)}')
@@ -149,15 +200,59 @@ class ArrowExtractor(BaseExtractor):
         batches = np.arange(BATCH_SIZE, arrow_crops.shape[0], BATCH_SIZE)
         arrow_crops = np.split(arrow_crops, batches)
         arrows_pred = []
+        # with torch.no_grad():
+        #     for batch in arrow_crops:
+
+        #         arrows_pred.append(self.arrow_detector(torch.tensor(batch)).numpy())
+        # arrows_pred = np.concatenate(arrows_pred, axis=0)
+        # arrows_pred = arrows_pred > ExtractorConfig.ARROW_DETECTOR_THRESH
+        # inliers = np.argwhere(arrows_pred == True)[:, 0]
+        # arrows = [arrows[idx] for idx in inliers]
+        # return arrows
+        
         with torch.no_grad():
             for batch in arrow_crops:
-
-                arrows_pred.append(self.arrow_detector(torch.tensor(batch)).numpy())
+                _, out = self.arrow_detector(torch.tensor(batch))
+                arrows_pred.append(out.numpy())
         arrows_pred = np.concatenate(arrows_pred, axis=0)
-        arrows_pred = arrows_pred > ExtractorConfig.ARROW_DETECTOR_THRESH
-        inliers = np.argwhere(arrows_pred == True)[:, 0]
-        arrows = [arrows[idx] for idx in inliers]
-        return arrows
+        arrows_eq_pred = arrows_pred[idx_last_arrows:]
+        arrows_pred = arrows_pred[:idx_last_arrows]
+        # arrows_pred = arrows_pred > ExtractorConfig.ARROW_DETECTOR_THRESH
+        # pred_scores = np.max(arrows_pred[:,1:], axis=-1)
+        inliers = np.argmax(arrows_pred, -1)
+        inliers = np.argwhere(inliers != 0).squeeze(1)
+        # inliers = np.argwhere(pred_scores > ExtractorConfig.ARROW_DETECTOR_THRESH )[:, 0]
+        inliers_eq = np.argmax(arrows_eq_pred, -1)
+        inliers_eq = np.argwhere(inliers_eq == 2).squeeze(1)
+        arrow_classes = [arrows_pred[idx].argmax() for idx in inliers] + [2 for _ in range(len(inliers_eq))]
+        inliers = inliers.tolist() + (inliers_eq+idx_last_arrows).tolist()
+        arrows = [all_arrows[idx] for idx in inliers]
+
+        completed_arrows = []
+        final_classes = []
+        for arrow, cls_idx in zip(arrows, arrow_classes):
+            try:
+                a = self.instantiate_arrow(arrow, cls_idx)
+                completed_arrows.append(a)
+                final_classes.append(cls_idx)
+            except ValueError:
+                log.info("Arrow was not instantiated - failed on eroding an arrow into its hook")
+        # arrows = [self.instantiate_arrow(arrow, cls_idx) for arrow, cls_idx in zip(arrows, arrow_classes)]
+        self.fig.set_roles([a.panel for a in completed_arrows], FigureRoleEnum.ARROW)
+        filtered_arrows = []
+        equilibrium_arrows = [a for a in completed_arrows if isinstance(a, EquilibriumArrow)]
+        for arrow in completed_arrows:
+            if isinstance(arrow, SolidArrow) and any( a.panel.contains(arrow.panel) for a in equilibrium_arrows):
+                continue
+            elif isinstance(arrow, CurlyArrow) and arrow.panel.area / self.fig.get_bounding_box().area * 100 < 0.1:
+                continue
+            else:
+                filtered_arrows.append(arrow)
+        return self.separate_arrows(filtered_arrows)
+
+        
+        # arrows = [arrow for arrow in arrows if arrow.area / self.fig.get_bounding_box().area > 1e-3]
+
         # solid_arrows = []
         # curly_arrows = []
         # for a in arrows:
@@ -187,7 +282,6 @@ class ArrowExtractor(BaseExtractor):
                 log.info("Arrow was not instantiated - failed on eroding an arrow into its hook")
         # arrows = [self.instantiate_arrow(arrow, cls_idx) for arrow, cls_idx in zip(arrows, arrow_classes)]
         self.fig.set_roles([a.panel for a in completed_arrows], FigureRoleEnum.ARROW)
-        return self.separate_arrows(completed_arrows)
 
     def preprocess_model_input(self, arrow):
         """Converts arrow objects into image arrays and resizes them to the desired input shape as required by the

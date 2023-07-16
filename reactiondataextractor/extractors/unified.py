@@ -21,7 +21,7 @@ from torch import Tensor
 # from extractors.lambda_wrapper import Detectron2Adapter
 from models.exceptions import NoDiagramsFoundException
 from reactiondataextractor.models import BaseExtractor, Candidate
-from reactiondataextractor.models.reaction import Label, Conditions, Diagram
+from reactiondataextractor.models.reaction import Label, Conditions, Diagram, CurlyArrow
 from reactiondataextractor.models.segments import Panel, Rect, FigureRoleEnum, Crop, PanelMethodsMixin, Figure
 from reactiondataextractor.extractors import ConditionsExtractor, LabelExtractor
 from configs.config import ExtractorConfig
@@ -135,8 +135,13 @@ class UnifiedExtractor(BaseExtractor):
         :type diags: list[Diagram]"""
         for diag in diags:
             for arrow in self.all_arrows:
-                if lies_along_arrow_normal(arrow, diag) and diag.edge_separation(arrow.panel) < ExtractorConfig.ARROW_DIAG_MAX_DISTANCE:
-                    arrow.children.append(diag)
+                if not isinstance(arrow, CurlyArrow) and lies_along_arrow_normal(arrow, diag) and diag.edge_separation(arrow.panel) < ExtractorConfig.ARROW_DIAG_MAX_DISTANCE:
+                    conditions = [c for c in arrow.children if isinstance(c, Conditions)]
+                    if len(conditions) > 0:
+                        conditions[0]._diags.append(diag)
+                        conditions[0].panel = Panel.create_megapanel([conditions[0].panel, diag.panel], diag.panel.fig)
+                    else:
+                        arrow.children.append(Conditions(diag.panel,None,None,None,diags=[diag]))
 
     def clean_up_diag_label_matchings(self, diags):
         diags_multiple_labels = [d for d in diags if len(d.children) > 1]
@@ -350,6 +355,8 @@ class UnifiedExtractor(BaseExtractor):
         :return: the largest connected component in main figure coordinates
         :type: np.ndarray"""
         bbox_crop = Crop(self.fig, bbox)
+        if any([s == 0 for s in bbox_crop.img.shape]):
+                return
         try:
             prior = max(bbox_crop.connected_components, key=lambda cc: cc.area)
         except ValueError: # no connected components in the crop
@@ -383,6 +390,8 @@ class UnifiedExtractor(BaseExtractor):
         adjusted = []
         for cand in region_candidates:
             crop = cand.panel.create_extended_crop(self.fig, extension=1)
+            if any([s == 0 for s in crop.img.shape]):
+                continue
             relevant_ccs = [crop.in_main_fig(cc) for cc in crop.connected_components]
             # unassigned_relevant_ccs = [cc for cc in relevant_ccs if cc.role is None]  # Previously unassigned ccs
             # if unassigned_relevant_ccs: # Remove overlaps with other ccs
@@ -639,10 +648,14 @@ class DiagramExtractor(BaseExtractor):
                                           num_iterations)
                 dilated_figs[num_iterations] = dilated_temp
 
-            try:
-                dilated_structure_panel = [cc for cc in dilated_temp.connected_components if cc.contains(diag)][0]
-            except IndexError: ## Not found
+            # try:
+            corresponding_panels_in_dilated_fig = [cc for cc in dilated_temp.connected_components if cc.contains(diag)]
+            if len(corresponding_panels_in_dilated_fig) > 0:
+                dilated_structure_panel = min(corresponding_panels_in_dilated_fig, key=lambda panel: panel.area)
+            else:
                 continue
+            # except IndexError: ## Not found
+            #     continue
             # Crop around with a small extension to get the connected component correctly
             structure_crop = dilated_structure_panel.create_extended_crop(dilated_temp, extension=5)
             other = [structure_crop.in_main_fig(c) for c in structure_crop.connected_components if
@@ -791,7 +804,7 @@ class Detectron2Adapter:
             else:
                 tiler = ImageTiler(self.fig.img_detectron, ExtractorConfig.TILER_MAX_TILE_DIMS, main_predictions=None)
                 tiles = tiler.create_tiles()
-                BATCH_SIZE = 6
+                BATCH_SIZE = 4
                 batches = np.arange(BATCH_SIZE, tiles.shape[0], BATCH_SIZE)
                 tiles_batches = np.split(tiles, batches)
                 predictions = []

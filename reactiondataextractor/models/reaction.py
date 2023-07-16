@@ -495,8 +495,8 @@ class BaseArrow(PanelMethodsMixin):
             img[self.panel.pixels] = 255
             cnt, _ = cv2.findContours(img,
                                       ExtractorConfig.CURLY_ARROW_CNT_MODE, ExtractorConfig.CURLY_ARROW_CNT_METHOD)
-            assert len(cnt) == 1
-            self.contour = cnt[0]
+            assert len(cnt) <=2
+            self.contour = cnt
 
     def compute_reaction_reference_pt(self):
         """Computes a reference point for a reaction step. This point alongside arrow's center point is used to decide

@@ -4,7 +4,7 @@ Optical Character Recognition
 =============================
 
 Extract text from images using Tesseract.
-
+git
 author: Damian Wilary
 email: dmw51@cam.ac.uk
 

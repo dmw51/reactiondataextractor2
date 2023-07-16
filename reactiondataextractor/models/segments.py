@@ -676,7 +676,7 @@ class Figure(object):
         self.labelled_img = labelled
         for label, cc_stat in enumerate(stats):
             x1, y1, w, h, _ = cc_stat
-            if w*h < self.area * 0.99:  # Spurious cc encompassing the whole image is sometimes produced
+            if w*h < self.area * 0.95:  # Spurious cc encompassing the whole image is sometimes produced
                 x2, y2 = x1 + w, y1 + h
                 panels.append(Panel((y1, x1, y2, x2), fig=self, tags=[label]))
 
@@ -715,8 +715,9 @@ class Figure(object):
 
     def set_roles(self, panels, role):
         for panel in panels:
-            parent_cc = [cc for cc in self.connected_components if cc == panel][0]
-            parent_cc.role = role
+            parent_cc = [cc for cc in self.connected_components if cc.contains(panel)]
+            for cc in parent_cc:
+                cc.role = role
 
 
 class Crop(Figure):
