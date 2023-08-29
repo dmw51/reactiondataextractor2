@@ -5,7 +5,6 @@ channels:
   - mcs07
   - chemdataextractor
   - conda-forge
-  - defaults
 dependencies:
   - tesseract=4.1.1
   - pytorch-cpu=1.10

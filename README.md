@@ -24,6 +24,11 @@ First, install [Miniconda](https://docs.conda.io/en/latest/miniconda.html), whic
 Next, go to the command line terminal and clone the git repository by typing
 
     git clone https://github.com/dmw51/reactiondataextractor2 
+
+Update apt and apt-get, then install the following required packages:
+
+    sudo apt-get install gcc g++ libpotrace-dev pkg-config libagg-dev ffmpeg libsm6 libxext6
+    sudo apt install libtesseract-dev
     
 Inside the cloned directory, create the conda environment by typing
     

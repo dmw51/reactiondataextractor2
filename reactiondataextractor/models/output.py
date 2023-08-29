@@ -540,7 +540,92 @@ class RoleProbe:
         return scan_params
             
 
+    # def resolve_nodes(self):
+    #     # """Looks for inconsistent diagram nodes and fixes them.
+    #     #
+    #     #  Diagram nodes are symmetric in that if diagrams take part in an intermediate step, all constructed nodes
+    #     #  associated with this group should contain the same number of diagrams. If something goes wrong, we choose a
+    #     #  minimal node to replace all the nodes associated with this diagram group. A minimal node is defined
+    #     #  as a list of diagrams of smallest length common to a group of nodes. For example, if three nodes contain diagrams
+    #     #  [A, B], [A,B] and [A, B, C], we choose [A, B] as the minimal node and replace the three nodes as [A,B] thus
+    #     #  fixing the third node"""
+    #     # nodes = [(node, step_idx) for (step_idx, step) in enumerate(self.reaction_steps) for node in (step.nodes[0], step.nodes[2])]
+    #     # getter = itemgetter(0)
+    #     # not_yet_grouped = set(list(range(len(nodes))))
+    #     # groups = []
+    #     # idx1 = 0
+    #     # while idx1 <= len(nodes) - 1:
+    #     #     if idx1 not in not_yet_grouped:
+    #     #         idx1 += 1
+    #     #         continue
+    #     #     group = [nodes[idx1]]
+    #     #     not_yet_grouped.remove(idx1)
+    #     #     for idx2 in range(len(nodes)):
+    #     #         node_intersection = set(getter(nodes[idx1])).intersection(set(getter(nodes[idx2])))
+    #     #         if idx2 in not_yet_grouped and node_intersection:
+    #     #             group.append(nodes[idx2])
+    #     #             not_yet_grouped.remove(idx2)
+    #     #     groups.append(group)
+    #     #     idx1 += 1
+    #     #
+    #     # for group in groups:
+    #     #     if len(group) > 2:
+    #     #         min_node = min(group, key=len)
+    #     #         min_node, idx = min_node
+    #     #         for node, step_idx in group:
+    #     #             step = self.reaction_steps[step_idx]
+    #     #             for step_node in step.nodes:
+    #     #                 if set(step_node).intersection(set(min_node)):
+    #     #                     step_node = min_node
+    #     # return groups
+    #
+    #     def compute_smallest_non_self_distance(panel1, panels):
+    #         """Computes smallest distance between panel1 and a panel inside panels, after potentially excluding
+    #         panel1 from panels"""
+    #         panels = copy.copy(panels)
+    #         if panel1 in panels:
+    #             panels.remove(panel1)
+    #
+    #         return min([panel1.edge_separation(p) for p in panels])
+    #
+    #     # for step in self.reaction_steps:
+    #     for diag in self.diagrams:
+    #         for step in diag.reaction_steps:
+    #             if not step.single_line: ## Do not use the criteria if step is spread across multiple lines
+    #                 continue
+    #
+    #             if diag in step.reactants:
+    #                 group = step.reactants
+    #             else:
+    #                 group = step.products
+    #             group_copy = group + [step.arrow]
+    #             min_dist = compute_smallest_non_self_distance(diag, group_copy)
+    #             if min_dist > SchemeConfig.MAX_GROUP_DISTANCE:
+    #                 group.remove(diag)
+    #                 diag.reaction_steps.remove(step)
+    #                 # TEST THIS - Is this working??????
+    #         # groups = [reaction_step.reactants if diag in reaction_step.reactants else reaction_step.products for
+    #         #           reaction_step in diag.reaction_steps]
+    #         # arrows = [step.arrow for step in diag.reaction_steps]
+    #         # groups = [list(g)+[a] for g,a in zip(groups, arrows)]
+    #         # min_dists = [compute_smallest_non_self_distance(diag, group ) for group in groups]
+    #         # # dists = [diag.panel.edge_separation(arrow) for arrow in arrows]
+    #         # print(min_dists)
 
+    # def visualize_steps(self):
+    #     canvases = [step.visualize(self.fig) for step in self.reaction_steps]
+    #     _Y_SEPARATION = 50
+    #     out_canvas_height = np.sum([c.shape[0] for c in canvases]) + _Y_SEPARATION * (len(canvases) - 1)
+    #     out_canvas_width = np.max([c.shape[1] for c in canvases])
+    #     out_canvas = np.zeros([out_canvas_height, out_canvas_width])
+    #     y_end = 0
+    #     for canvas in canvases:
+    #         h, w = canvas.shape
+    #         out_canvas[y_end:y_end+h, 0:0+w] = canvas
+    #         y_end += h + _Y_SEPARATION
+    #
+    #     plt.imshow(out_canvas)
+    #     plt.show()
 
     def _search_elsewhere(self, where, arrow, direction, direction_normal, switch):
         """
@@ -662,6 +747,20 @@ class RoleProbe:
             return panel.edge_separation(temp_rect) < prox_dist
         else: 
             return panel.center_separation(temp_rect) < prox_dist
+        
+    # def _compute_arrow_scan_params(self, arrow):
+    #     (x, y), (MA, ma), angle = cv2.fitEllipse(arrow.contour[0])
+    #     angle = angle - 90  # Angle should be anti-clockwise relative to +ve x-axis
+    #     normal_angle = angle + 90
+    #     # center = np.asarray([x, y])
+    #     direction = np.asarray([1, np.tan(np.radians(angle))])
+    #     if abs(np.around(angle, -1)) == 90 or abs(np.around(angle, -1)) == 270: ## Manually fix around tan discontinuities
+    #         direction = np.asarray([0, 1])
+    #     direction = direction / np.linalg.norm(direction)
+    #     direction_normal = np.asarray([1, np.tan(np.radians(normal_angle))])
+    #     direction_normal = direction_normal / np.linalg.norm(direction_normal)
+
+    #     return direction, direction_normal
     
     def _compute_arrow_scan_params(self, arrow):
         min_rect = cv2.minAreaRect(arrow.contour[0])
@@ -680,6 +779,51 @@ class RoleProbe:
         return direction_arrow, direction_normal
 
 
+    # def _perform_line_scan(self, arrow, region_dims, start_point, direction, direction_normal, switch):
+    #     # assert switch in [-1, 1]
+    #     region_x_length, region_y_length = region_dims
+    #     epsilon = 1e-5  # Avoid division by 0
+    #     stepsize_x = max(self.stepsize * direction[0], epsilon, key=lambda x: abs(x))
+    #     stepsize_y = max(self.stepsize * direction[1], epsilon, key=lambda x: abs(x))
+    #     num_centers_x = abs(region_x_length // stepsize_x)
+    #     num_centers_y = abs(region_y_length // stepsize_y)
+    #     num_centers = int(min(num_centers_x, num_centers_y))
+    #     if num_centers == 0:  # Handles a case where no line scan can be performed because the arrow lies close to
+    #                           # image boundary (and no diagrams are present on this boundary)
+    #         return []
+    #     deltas = np.array([[stepsize_x * n, stepsize_y * n] for n in range(1, num_centers + 1)])
+    #     deltas = deltas * switch
+    #     centers = start_point + deltas
+    #     lines = [Line(find_points_on_line(center, direction_normal, distance=self.segment_length))
+    #                  for center in centers]
+
+    #     # Visualize lines ##
+    #     # import matplotlib.pyplot as plt
+    #     # plt.imshow(self.fig.img)
+    #     # for line in lines:
+    #     #     (x1, y1), (x2, y2) = line.endpoints
+    #     #     plt.plot([x1, x2], [y1, y2], c='r')
+    #     # plt.show()
+
+    #     try:
+    #         other_arrows = copy.copy(self.arrows)
+    #         other_arrows.remove(arrow)
+    #         arrow_overlap = [any(self._check_overlap(l, a.panel) for a in other_arrows) for l in lines].index(True)
+    #     except ValueError:
+    #         arrow_overlap = None
+
+    #     if arrow_overlap is not None and arrow_overlap > 2: ### Remove further lines, unless two arrows are
+    #         # neighbouring one another
+    #         lines = lines[:arrow_overlap]
+    #     diags = []
+
+    #     for l in lines:
+    #         for d in self.diagrams:
+    #             if self.sufficient_overlap(l, d.panel):
+    #                 diags.append(d)
+    #     diags = list(set(diags))
+
+    #     return diags
 
     def _perform_scan(self, arrow, region_dims, start_point, direction, switch):
         # assert switch in [-1, 1]

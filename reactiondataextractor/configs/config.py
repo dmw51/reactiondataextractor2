@@ -1,15 +1,15 @@
 import os
-
+import sys
 import cv2
 
-
+THIS_DIR = os.path.dirname(os.path.abspath(sys.argv[0]))
 
 class Config:
     FIGURE = None
     ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
     IMG_PATH = None
     HOME = os.path.expanduser('~')
-    TESSDATA_PATH = f'/home/damian/Desktop/reactiondataextractor2/tessdata'
+    TESSDATA_PATH = f'{THIS_DIR}/../../tessdata'
     SINGLE_BOND_LENGTH = 1.54
 
 
@@ -23,7 +23,7 @@ class ExtractorConfig(Config):
     # Path to the arrow detector weights
     # ARROW_DETECTOR_PATH = os.path.join(Config.ROOT_DIR, '../models/cnn_weights/torch_arrow_detector_resnet18.pt')
     # ARROW_DETECTOR_PATH = os.path.join('/home/damian/Downloads/torch_arrow_detector_classifier_combined_resnet18.pt')
-    ARROW_DETECTOR_PATH = os.path.join('/home/damian/Downloads/torch_arrow_detector_classifier_combined_resnet18v3.pt')
+    ARROW_DETECTOR_PATH = os.path.join(Config.ROOT_DIR, '../models/cnn_weights/torch_arrow_detector_classifier.pt')
 
 
     # Path to the arrow classifier weights
