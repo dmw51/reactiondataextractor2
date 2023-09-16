@@ -1,6 +1,7 @@
-import cv2
 import numpy as np
+from typing import List
 
+import cv2
 import potrace
 
 from configs import config
@@ -9,13 +10,16 @@ from reactiondataextractor.configs import Config, ExtractorConfig
 
 
 class DiagramVectoriser:
+    """Diagram vectorisation class. This class is used to establish single bond line length, as well
+    as establish adjacency matrices between carbon atoms in diagrams.
+    """
     def __init__(self):
-        # self.corners = []
-        # self.adjacency_matrix = []
         self.diag = None
         
-    def create_vectorised_diagram_graph(self):
-        # import matplotlib.pyplot as plt
+    def create_vectorised_diagram_graph(self) -> None:
+        """Diagram vectorisation method. Finds corners corresponding to carbon atoms in the backbone, as well
+        as establishes the adjacency matrix
+        """
         assert self.diag, "diagram for vectorisation has not been set"
 
         img = erase_elements(self.diag.crop, [char.panel for char in self.diag.text_chars]+
@@ -27,35 +31,34 @@ class DiagramVectoriser:
         
         distance_matrix = np.array([[euclidean_distance(p1, p2) for p1 in corners] for p2 in corners])        
         adjacency_matrix = self._create_adjacency_matrix(distance_matrix)
-        # import matplotlib.pyplot as plt
-        # for idx,row in enumerate(adjacency_matrix):
-        #     plt.close()
-        #     if np.sum(row) > 1:
-        #         plt.imshow(img)
-        #         plt.scatter(*corners[idx], c='r')
-        #         connected = np.where(row)
-        #         for connected_idx in connected[0]:
-        #             if connected_idx != idx:
-        #                 plt.scatter(*corners[connected_idx], c='b')
         self.diag.corners = corners
         self.diag.adjacency_matrix = adjacency_matrix
 
-    def vectorise_image(self, img, corner_prune_dist, artificial_corners=[]):
+    def vectorise_image(self, img: np.ndarray, corner_prune_dist:float, artificial_corners:List=[]) -> np.ndarray:
+        """Uses potrace library to vectorise the image. Removes spurious detected corners. Adds one corner
+        per each heteroatom and superatom detected
+
+        :param img: image to vectorise
+        :type img: np.ndarray
+        :param corner_prune_dist: threshold distance when pruning corners. Corners within this distance are clustered
+        together and replaced by an average of coordinates
+        :type corner_prune_dist: float
+        :param artificial_corners: corners to be added corresponding to found heteroatoms and superatoms, defaults to []
+        :type artificial_corners: List, optional
+        :return: final corners in the diagram
+        :rtype: np.array[float]
+        """
         img = cv2.ximgproc.thinning(img)
         data = potrace.Bitmap(img / 255)
         trace = data.trace(alphamax=0.4)
         corners = [segment.c for curve in trace for segment in curve if segment.is_corner]
         if artificial_corners:
             corners = corners + artificial_corners
-        corners = self.remove_duplicate_corners(corners, corner_prune_dist, fixed_corners=artificial_corners) 
+        corners = self._remove_duplicate_corners(corners, corner_prune_dist, fixed_corners=artificial_corners) 
         return corners
-        # import matplotlib.pyplot as plt
-        # plt.imshow(img)   
-        # for corner in corners:
-        #     if corner:
-        #         plt.scatter(*corner)
 
-    def remove_duplicate_corners(self, corners, thresh_dist, fixed_corners=[]):
+    def _remove_duplicate_corners(self, corners, thresh_dist, fixed_corners=[]):
+        "Removes duplicate, spurious corners"
         duplicate_found = True
         
         while duplicate_found:
@@ -90,20 +93,18 @@ class DiagramVectoriser:
         return adjacency_matrix
     
     
-def estimate_single_bond(fig):
+def estimate_single_bond(fig: 'Figure') -> None:
     """Estimates length of a single bond in an image
-    Uses a skeletonise image to find the number of lines of differing lengths. The single bond length is chosen using
-    a graph of number of detected lines vs. the length of a line. The optimal value is where the change in number of
-    lines as the length varies is greatest.
+    Finds lines in the largest connected components to get a rough estimate of the line corresponding to single bond.
+    Then uses this rough estimate to refine its value by vectorising the same components
     :param Figure fig: analysed figure
     :return: approximate length of a single bond
     :rtype: int"""
     ccs = fig.connected_components
-    # Get a rough bond length (line length) value from the two largest structures
+    # Get a rough bond length (line length) value from the two largest structures by finding lines
     ccs = sorted(ccs, key=lambda cc: cc.area, reverse=True)
     estimation_ccs = ccs[:2]
     approx_line_lengths = []
-    # estimation_fig = isolate_patches(fig, ccs[:3])
     biggest_cc = ccs[0]
     length_scan_param = 0.05 * min(biggest_cc.width, biggest_cc.height)
     pixel_masks = []
@@ -124,6 +125,7 @@ def estimate_single_bond(fig):
     approx_line_length = np.mean(approx_line_lengths)
     fig.single_bond_length = approx_line_length
     
+    # Refine the value 
     vectoriser = DiagramVectoriser()
     nearest_atom_dists_all = []
     for idx, cc in enumerate(estimation_ccs):
@@ -138,6 +140,4 @@ def estimate_single_bond(fig):
     nearest_atom_dists_all = [dst for dst in nearest_atom_dists_all if dst != np.inf]
     
     single_bond = np.mean(nearest_atom_dists_all)
-    # config.ExtractorConfig.SOLID_ARROW_MIN_LENGTH = int(single_bond // 4)
-    # config.ExtractorConfig.SOLID_ARROW_THRESHOLD = int(single_bond // 4)
     fig.single_bond_length = single_bond

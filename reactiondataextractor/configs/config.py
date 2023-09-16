@@ -13,43 +13,23 @@ class Config:
     SINGLE_BOND_LENGTH = 1.54
 
 
-
 class ExtractorConfig(Config):
     """Config used for all extractor classes"""
-    # ARROW_DETECTOR_PATH = os.path.join(Config.ROOT_DIR, 'models/ml_models/arrow_detector.hdf5')
-    # ARROW_CLASSIFIER_PATH = os.path.join(Config.ROOT_DIR, 'models/ml_models/arrow_classifier.h5')
     # Whether to use cpu or gpu to run deep models
     DEVICE = 'cpu'  ## 'cpu' or 'cuda'
     # Path to the arrow detector weights
-    # ARROW_DETECTOR_PATH = os.path.join(Config.ROOT_DIR, '../models/cnn_weights/torch_arrow_detector_resnet18.pt')
-    # ARROW_DETECTOR_PATH = os.path.join('/home/damian/Downloads/torch_arrow_detector_classifier_combined_resnet18.pt')
     ARROW_DETECTOR_PATH = os.path.join(Config.ROOT_DIR, '../models/cnn_weights/torch_arrow_detector_classifier.pt')
-
-
     # Path to the arrow classifier weights
     ARROW_CLASSIFIER_PATH = os.path.join(Config.ROOT_DIR, '../models/cnn_weights/torch_arrow_classifier.pt')
     # Shape of an arrow image fed to the detector model
     ARROW_IMG_SHAPE = [64, 64]
-    # Hough transform threshold and minimal length for arrow candidate detection
-    SOLID_ARROW_THRESHOLD = None  # Set dynamically based on the length of a single-bond line
-    SOLID_ARROW_MIN_LENGTH = None  # Set dynamically based on the length of a single-bond line
-    # cv2 params for curly arrow candidate detection
-    CURLY_ARROW_CNT_MODE = cv2.RETR_EXTERNAL
-    CURLY_ARROW_CNT_METHOD = cv2.CHAIN_APPROX_SIMPLE
-    # Threshold used for curly arrow candidate selection - enforces minimal connected component area
-    CURLY_ARROW_MIN_AREA_FRACTION = 0.005
-    # Threshold - maximum area of a contour wrt the total bbox area (selects sparse boxes)
-    CURLY_ARROW_CNT_AREA_TO_BBOX_AREA_RATIO = 0.3
-    # Arrow detection threshold (classification)
-    # ARROW_DETECTOR_THRESH = 0.95
-    ARROW_DETECTOR_THRESH = 0.7
-
+    # cv2 params for arrow initialization
+    ARROW_CNT_MODE = cv2.RETR_EXTERNAL
+    ARROW_CNT_METHOD = cv2.CHAIN_APPROX_SIMPLE
 
     # Path to the main object detection model
     UNIFIED_EXTR_MODEL_WT_PATH = os.path.join(Config.ROOT_DIR,
                                               '../models/cnn_weights/model_best_15Mar_diou.pth')
-    # UNIFIED_EXTR_MODEL_WT_PATH = os.path.join(Config.ROOT_DIR,
-    #                                           'models/ml_models/unified_detection/model_final 2000_bg_0.pth')
     # Threshold for suppressing detected diagrams overlapping with arrows
     UNIFIED_DIAG_FP_IOU_THRESH = 0.75
     # Threshold for reclassifying textual elements based on proximity to arrows and diagrams
@@ -77,6 +57,7 @@ class ExtractorConfig(Config):
     # Maximum allowed distance difference between a labels and the first and second-closest diagram for pair reassignment
     DIAG_LABEL_MAX_REASSIGNMENT_DISTANCE = 75
 
+
 class ProcessorConfig(Config):
     # Image binarisation thresholds
     BIN_THRESH = [70, 255]
@@ -89,15 +70,10 @@ class OCRConfig(Config):
 
 
 class SchemeConfig(Config):
-    # SEARCH_DISTANCE_FACTOR = 0.9
     # Overlap needed between a probing line and the diagram bbox to classify a diagram as part of a reaction step
     MIN_PROBING_OVERLAP_FACTOR = 0.35
     MAX_GROUP_DISTANCE = 50 # TODO: Adjust this value (maybe make a coefficient out of this)
 
-
-class SegmentsConfig(Config):
-    # What fraction of a connected component needs to be within a crop to belong to it
-    CROP_THRESH_INTER_AREA = 0.95
 
 class GlobalRGroupCache:
     def __init__(self):

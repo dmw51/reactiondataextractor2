@@ -12,9 +12,12 @@ from __future__ import division
 from collections.abc import Container
 import copy
 import numpy as np
+from typing import List
+
 import cv2
 from scipy import ndimage as ndi
 from scipy.stats import mode
+
 from configs import config
 from reactiondataextractor.models.geometry import Line, Point, OpencvToSkimageHoughLineAdapter
 from reactiondataextractor.models.segments import Rect, Panel, Figure, FigureRoleEnum
@@ -63,9 +66,7 @@ class PrettyList(list):
     """list with a pretty __str__ method; used for depicting output
         :param list_: underlying list
         :type list_: list"""
-    # def __new__(cls, list_):
-    #     obj = super().__new__(cls, list_)
-    #     return obj
+
 
     def __init__(self, list_):
         self._list = list_
@@ -154,24 +155,19 @@ def pixel_ratio(img, rect):
     return ratio
 
 
-# def binary_tag(fig):
-#     """ Tag connected regions with pixel value of 1
-#     :param fig: Input Figure
-#     :returns fig: Connected Figure
-#     """
-#     fig = copy.deepcopy(fig)
-#     fig.img, no_tagged = ndi.labels(fig.img)
-#     return fig
+def erase_elements(fig: 'Figure', elements: List['Panel'], copy_fig: bool=True) -> Figure:
+    """Erases elements inside fig by switching off their pixels and returns the altered figure.
+    The figure can be copied prior to the action by setting `copy_fig` to True.
 
-
-def erase_elements(fig, elements, copy_fig=True):
-    """
-    Erase elements from an image on a pixel-wise basis. if no `pixels` attribute, the function erases the whole
-    region inside the bounding box. Automatically assigns roles to ccs in the new figure based on the original.
-    :param Figure fig: Figure object containing binarized image
-    :param iterable of panels elements: list of elements to erase from image
-    :return: copy of the Figure object with elements removed
-    """
+    :param fig: figure in which elements are present
+    :type fig: Figure
+    :param elements: panels containing components to be erased
+    :type elements: List[Panel]
+    :param copy_fig: whether to perform action on a created copy, or the figure itself, defaults to True
+    :type copy_fig: bool, optional
+    :return: _description_
+    :rtype: Figure
+    # """
     if copy_fig:
         temp_fig = copy.deepcopy(fig)
     else:
@@ -181,22 +177,10 @@ def erase_elements(fig, elements, copy_fig=True):
         temp_fig = Figure(img=img_copy, raw_img=raw_img, img_detectron=img_detectron)
         temp_fig._scaling_factor = fig.scaling_factor
         
-    try:
-        for panel in elements:
-            panel.mask_off(temp_fig)
-        temp_fig.set_connected_components()
+    for panel in elements:
+        panel.mask_off(temp_fig)
+    temp_fig.set_connected_components()
 
-    except AttributeError:
-        for element in elements:
-            temp_fig.img[element.top:element.bottom+1, element.left:element.right+1] = 0
-            coords = [element.top, element.left, element.bottom, element.right]
-            if fig.scaling_factor:
-                scaled_element = np.rint(np.asarray(coords) / fig.scaling_factor).astype(np.int32)
-                # list(map(lambda elem: np.rint(elem/fig.scaling_factor), coords), dtype=np.int32)
-                bg_value = mode(temp_fig.img_detectron.ravel(), keepdims=False)[0]
-                temp_fig.img_detectron[scaled_element[0]:scaled_element[2]+1, scaled_element[1]:scaled_element[3]+1] = bg_value
-            else:
-                temp_fig.img_detectron = None
     return temp_fig
 
 def dilate_fig(fig, num_iterations):
@@ -206,12 +190,10 @@ def dilate_fig(fig, num_iterations):
     :param int num_iterations: number of iterations for dilation
     :return Figure: new Figure object
     """
-    # selem = disk(kernel_size)
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
     f = cv2.dilate(fig.img, kernel, iterations=int(num_iterations))
     f = Figure(f, raw_img=fig.raw_img)
     return f
-    # return Figure(binary_dilation(fig.img, selem), raw_img=fig.raw_img)
 
 
 def is_slope_consistent(lines):
@@ -243,18 +225,6 @@ def is_slope_consistent(lines):
 
     return True
 
-
-def remove_small_fully_contained(connected_components):
-    """
-    Remove smaller connected components if their bounding boxes are fully enclosed within larger connected components
-    :param iterable connected_components: set of all connected components
-    :return: a smaller set of ccs without the enclosed ccs
-    """
-    enclosed_ccs = [small_cc for small_cc in connected_components if any(large_cc.contains(small_cc) for large_cc
-                    in remove_connected_component(small_cc, connected_components))]
-    # print(enclosed_ccs)
-    refined_ccs = connected_components.difference(set(enclosed_ccs))
-    return refined_ccs
 
 
 def merge_rect(rect1, rect2):
@@ -328,11 +298,6 @@ def intersect_rectangles(rect1, rect2):
     return Rect(left, right, top, bottom)
 
 
-def clean_output(text):
-    """ Remove whitespace and newline characters from input text."""
-    return text.replace('\n', '')
-
-
 def flatten_list(data):
     """
     Flattens multi-level iterables into a list of elements
@@ -376,25 +341,6 @@ def standardize(data):
     data -= feature_mean
     data /= feature_std
     return data
-
-
-def find_minima_between_peaks(data, peaks):
-    """
-    Find deepest minima in ``data``, one between each adjacent pair of entries in ``peaks``, where ``data`` is a 2D
-    array describing kernel density estimate. Used to cut ``data`` into segments in a way that allows assigning samples
-    (used to create the estimate) to specific peaks.
-    :param np.ndarray data: analysed data
-    :param [int, int...] peaks: indices of peaks in ``data``
-    :return: np.ndarray containing the indices of local minima
-    """
-    pairs = zip(peaks, peaks[1:])
-    minima = []
-    for pair in pairs:
-        start, end = pair
-        min_idx = np.argmin(data[1, start:end])+start
-        minima.append(min_idx)
-
-    return minima
 
 
 def is_a_single_line(fig, panel, line_length):
@@ -489,11 +435,8 @@ def lies_along_arrow_normal(arrow, obj):
     eps  = 1e-5
     dir_array = np.array([x_diff, y_diff])
     direction_arrow = dir_array / np.linalg.norm(dir_array)
-    # angle = angle - 90  # Angle should be anti-clockwise relative to +ve x-axis
 
-    # normal_angle = angle + 90
     center = np.asarray(arrow.panel.center)
-    # direction = np.asarray([1, np.tan(np.radians(angle))])
     direction_normal = np.asarray([-1*direction_arrow[1], direction_arrow[0]])
     dist = box_segment_lengths[largest_idx] / 2
     p_a1, p_a2 = find_points_on_line(center, direction_arrow, distance=dist * 1.5)

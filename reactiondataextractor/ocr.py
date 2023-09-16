@@ -17,20 +17,19 @@ from __future__ import print_function
 from __future__ import unicode_literals
 import locale
 
-import PIL.Image
-import cv2
-
-from configs.config import OCRConfig
-from reactiondataextractor.models.segments import Rect
-
 locale.setlocale(locale.LC_ALL, 'C')
 import collections
 import enum
 import logging
-
 import numpy as np
+from typing import Union
+
+import cv2
 from PIL import Image, ImageEnhance
 import tesserocr
+
+from configs.config import OCRConfig
+from reactiondataextractor.models.segments import Rect
 
 log = logging.getLogger('extract.ocr')
 
@@ -64,9 +63,15 @@ api.InitFull(
 )
 
 class TextChar:
-    def __init__(self, panel):
-        # crop = panel.crop
-        # crop.img = crop.img_detectron
+    """Class to represent an individual text character
+    """
+    def __init__(self, panel: 'Panel'):
+        """Initializes the character by cropping the relevant image patch, preprocessing 
+        and performing optical recognition.
+
+        :param panel: panel containing the text character
+        :type panel: Panel
+        """
         self.panel = panel
         ocr_img = cv2.cvtColor(self.panel.crop.img_detectron, cv2.COLOR_RGB2GRAY)
         ocr_img = cv2.imread(pil_enhance(cv2_preprocess(ocr_img)), cv2.IMREAD_GRAYSCALE)
@@ -74,8 +79,6 @@ class TextChar:
         text_blocks_char = get_text(ocr_img, whitelist=CHAR_WHITELIST, psm=PSM.SINGLE_CHAR)
         text_blocks_word = get_text(ocr_img, whitelist=CHAR_WHITELIST, psm=PSM.SINGLE_WORD)
 
-        # get_text(self.panel.crop.img, psm=PSM.SINGLE_CHAR, whitelist=CHAR_WHITELIST)
-        # text_blocks_word = get_text(self.panel.crop.img, psm=PSM.SINGLE_WORD, whitelist=CHAR_WHITELIST)
         text_blocks = max([text_blocks_char, text_blocks_word], key=lambda output: output[0].confidence if output else 0)
         if text_blocks:
             text = text_blocks[0].text.strip()
@@ -85,8 +88,6 @@ class TextChar:
             self.text = ''
             self.confidence = 0.0
 
-
-
     def __repr__(self):
         return f'TextChar({self.panel})'
 
@@ -94,12 +95,29 @@ class TextChar:
         return f"TextChar('{self.text}')"
 
 
-def img_to_text(img, whitelist, conf_threshold=70, psm=None):
+def img_to_text(img: np.ndarray,
+                whitelist: str,
+                conf_threshold: int=70,
+                psm: Union['PSM', None]=None):
+    """High-level OCR function
+
+    :param img: image to be fed to the OCR engine
+    :type img: np.ndarray
+    :param whitelist: list of allowed characters to be used by the OCR engine
+    :type whitelist: str
+    :param conf_threshold: confidence threshold, results below threshold are discarded, defaults to 70
+    :type conf_threshold: int, optional
+    :param psm: page segmentation mode used by the OCR engine, defaults to None
+    :type psm: Union[PSM, None], optional
+    :return: _description_
+    :rtype: _type_
+    """
+ 
     if psm is None:
         psm = PSM.SINGLE_BLOCK
     # top, left, bottom, right = region
     # img = crop.img
-    img = cv2.imread(pil_enhance(cv2_preprocess(img)), cv2.IMREAD_GRAYSCALE)
+    img = cv2.imread(_pil_enhance(_cv2_preprocess(img)), cv2.IMREAD_GRAYSCALE)
     initial_ocr = get_text(img, psm=psm, whitelist=whitelist, pad_val=0)
     if initial_ocr:
         analyser = OCRAnalyser(img, initial_ocr, conf_threshold=conf_threshold)
@@ -107,7 +125,7 @@ def img_to_text(img, whitelist, conf_threshold=70, psm=None):
     return []
 
 
-def cv2_preprocess(img):
+def _cv2_preprocess(img):
 
     img = cv2.resize(img, (0,0), fx=4, fy=4)
     kernel = np.ones((3, 3), np.uint8)
@@ -121,7 +139,7 @@ def cv2_preprocess(img):
     return 'temp.png'
 
 
-def pil_enhance(image_path):
+def _pil_enhance(image_path):
     image = Image.open(image_path)
 
     contrast = ImageEnhance.Contrast(image)
@@ -339,7 +357,7 @@ def get_text(img, x_offset=0, y_offset=0, psm=PSM.SINGLE_LINE, img_padding=20, w
     blocks = []
 
     api.SetPageSegMode(psm)
-    api.SetImage(PIL.Image.fromarray(img, mode='L'))
+    api.SetImage(Image.fromarray(img, mode='L'))
     if whitelist is not None:
         api.SetVariable('tessedit_char_whitelist', whitelist)
     # TODO: api.SetSourceResolution if we want correct pointsize on output?

@@ -4,6 +4,7 @@ from enum import Enum, auto
 from abc import ABC, abstractmethod
 import imageio as imageio
 import numpy as np
+from typing import Union, Tuple
 
 import cv2
 from PIL import Image
@@ -14,15 +15,13 @@ from reactiondataextractor.models.segments import Figure
 from reactiondataextractor.configs import config
 
 
-class Processor(ABC, GlobalFigureMixin):
-
-
+class ImageProcessor(ABC, GlobalFigureMixin):
+    """Base class for all image processors. Each subclass has to implement the `process` method"""
     class COLOR_MODE(Enum):
         GRAY = auto()
         RGB = auto()
 
-    def __init__(self, enabled=True, fig=None):
-        self._enabled = enabled
+    def __init__(self, fig=None):
         self.fig = fig
         super().__init__(self.fig)
         self._img = self.fig.img if self.fig else None
@@ -37,16 +36,24 @@ class Processor(ABC, GlobalFigureMixin):
         return self._img
 
 
-class ImageReader(Processor):
+class ImageReader(ImageProcessor):
+    """Class for reading an image file. Reads jpg/jpeg, png, bmp, as well as single images in gif format"""
+    def __init__(self, filepath: str, color_mode: 'ImageProcessor.COLOR_MODE'):
+        """init method. Takes in filepath as well as color mode (gray or RGB). RGB mode support is currently limited.
+        
 
-    def __init__(self, filepath, color_mode):
+        :param filepath: absolute path to file
+        :type filepath: str
+        :param color_mode: processing mode - the image will be either kept as RGB or processed into grayscale
+        :type color_mode: ImageProcessor.COLOR_MODE
+        """
         config.Config.IMG_PATH = filepath
         assert color_mode in self.COLOR_MODE, "Color_mode must be one of ImageColor.COLORMODE enum members"
         assert os.path.exists(filepath), "Could not open file - Invalid path was entered"
         self.filepath = filepath
         self.color_mode = color_mode
         _, self.ext = os.path.splitext(filepath)
-        super().__init__(enabled=True)
+        super().__init__()
 
     def process(self):
         """Reads an image into an np.ndarray from .png, .jpg/.jpeg etc formats, as well as .gif format (used by some
@@ -60,8 +67,6 @@ class ImageReader(Processor):
             img_detectron = cv2.imread(self.filepath)
 
         if img is None and self.ext == '.gif':   # Ensure this special case is treated
-            # with imageio.get_reader(self.filepath, format='gif') as reader:
-            #     img = reader.get_data(0)
 
             try:
                 img = imageio.mimread(self.filepath, format='gif')
@@ -69,11 +74,8 @@ class ImageReader(Processor):
             except ValueError:  # Binary images not handled above
                 img = Image.open(self.filepath).convert('L')
                 img = np.asarray(img)
-            # img_detectron = img
-            # img_detectron = cv2.cvtColor(img_detectron, cv2.COLOR_GRAY2BGR)
             img, img_detectron = self._convert_gif(img)
 
-            # img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         img = self.adjust_bg_value(img)
         img_detectron = self.adjust_bg_value(img_detectron, desired=255)
         self.fig = Figure(img=img, raw_img=img, img_detectron=img_detectron)  # Important that all used imgs have bg value 0 hence raw_img==img
@@ -116,32 +118,34 @@ class ImageReader(Processor):
         return img
 
 
-class ImageScaler(Processor):
-    """Processor used for scaling an image"""
+class ImageScaler(ImageProcessor):
+    """Processor used for scaling an image. Constant scale facilitates later processing"""
 
-    def __init__(self, fig, resize_min_dim_to, enabled=True):
+    def __init__(self, fig: 'Figure', resize_min_dim_to: int):
+        """Init method, where the scale is set
 
+        :param fig: Processed figure
+        :type fig: Figure
+        :param resize_min_dim_to: dimension to which the smaller dimension (W or H) will be resized
+        :type resize_min_dim_to: int
+        """
         self.resize_min_dim_to = resize_min_dim_to
-        # self.resize_max_dim_to = resize_max_dim_to
-        super().__init__(fig=fig, enabled=enabled)
+        super().__init__(fig=fig)
 
     def process(self):
         """Scales an image so that the smaller dimension has the desired length (specified inside __init__)"""
         min_dim = min(self.fig.img.shape)
         y_dim, x_dim = self.fig.img.shape
         scaling_factor = self.resize_min_dim_to/min_dim
-        # max_dim = max(self.fig.img.shape[:2])
-        # y_dim, x_dim = self.fig.img.shape
-        # scaling_factor = self.resize_max_dim_to / max_dim
         img = cv2.resize(self.fig.img, (int(x_dim*scaling_factor), int(y_dim*scaling_factor)))
         self.fig._scaling_factor = scaling_factor
         self.fig.img = img
         return self.fig
 
-class ImageNormaliser(Processor):
+class ImageNormaliser(ImageProcessor):
     """Processor used to normalise an image to a range between 0 and 1"""
-    def __init__(self, fig, enabled=True):
-        super().__init__(fig=fig, enabled=enabled)
+    def __init__(self, fig: 'Figure'):
+        super().__init__(fig=fig)
 
     def process(self):
         """Normalises an image to range [0, 1]"""
@@ -150,60 +154,20 @@ class ImageNormaliser(Processor):
         self.fig.img = img
         return self.fig
 
-# class TextLineRemover(Processor):
-#     WIDTH_THRESH_FACTOR = 0.3
-#
-#     def __init__(self, img, enabled=True):
-#         self.selem = np.concatenate((np.zeros((2, 6)), np.ones((2, 6)), np.zeros((2, 6))), axis=0).astype(np.uint8)
-#
-#         self.top_roi = Rect(0, 0, self.img.shape[0] // 5, self.img.shape[1] // 5)
-#         self.bottom_roi = Rect(int(self.img.shape[0] * 4 / 5), 0,
-#                                self.img.shape[0], int(self.img.shape[1] // 5))
-#
-#         super().__init__(enabled=enabled)
-#
-#     def process(self):
-#         if not self._enabled:
-#             return self.img
-#         img = cv2.cvtColor(self.img, cv2.COLOR_BGR2GRAY)
-#         img = 255 - img
-#         img = cv2.dilate(img, self.selem, iterations=6)
-#         ret, img = cv2.threshold(img, 40, 255, cv2.THRESH_BINARY)
-#         contours, hierarchy = cv2.findContours(img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-#         print(len(contours))
-#         crop_top = []
-#         crop_bottom = []
-#
-#         for cnt in contours:
-#             x, y, w, h = cv2.boundingRect(cnt)
-#             print(cv2.boundingRect(cnt))
-#             #             print(self.bottom_roi)
-#             if w > self.WIDTH_THRESH_FACTOR * self.img.shape[1]:
-#                 print('width okay')
-#
-#                 #                 print(f'{x}, {y}')
-#                 if self.top_roi.contains_point((x, y)):
-#                     crop_top.append((x, y, x + w, y + h))
-#                 elif self.bottom_roi.contains_point((x, y)):
-#                     crop_bottom.append((x, y, x + w, y + h))
-#
-#         # Crop the whole images down to the first bottom text line
-#         print(f'crop_bottom: {crop_bottom}')
-#         if crop_bottom:
-#             crop_bottom_boundary = min([coords[1] for coords in crop_bottom])
-#             print(crop_bottom_boundary)
-#             self._img = self._img[:crop_bottom_boundary, :]
-#         if crop_top:
-#             crop_top_boundary = max([coords[1] for coords in crop_top])
-#             self._img = self._img[crop_top_boundary:, :]
-#         return self._img
 
+class Binariser(ImageProcessor):
+    """Processor used for binarisation. Grayscale images are thresholed, whereas on RGB images,
+    a Canny edge detector is used"""
 
-class Binariser(Processor):
-    """Processor used for binarisation"""
+    def __init__(self, fig: 'Figure', bin_thresh: Tuple[int]=None):
+        """Init method. Input is a figure, and a pair of integers used by the thresholding algorithm
 
-    def __init__(self, fig, bin_thresh=None):
-        super().__init__(enabled=True, fig=fig)
+        :param fig: Processed Figure
+        :type fig: Figure
+        :param bin_thresh: a pair of integers to be used as the thresholding values by the algorithm, defaults to None
+        :type bin_thresh: Tuple[int], optional
+        """
+        super().__init__(fig=fig)
         if len(self.img.shape) == 2:
             self.color_mode = self.COLOR_MODE.GRAY
         elif len(self.img.shape) == 3 and self.img.dtype == np.uint8:
@@ -219,13 +183,12 @@ class Binariser(Processor):
             return fig_copy
 
 
-class Isolator(Processor):
+class Isolator(ImageProcessor):
     """Processor class used for isolating individual connected components"""
     def __init__(self, fig, to_isolate, isolate_mask):
         super().__init__(fig=fig)
         self.to_isolate = to_isolate
         self.isolate_mask = isolate_mask
-
 
     def _isolate_panel(self):
         #TODO
@@ -233,24 +196,11 @@ class Isolator(Processor):
 
     def _isolate_mask(self):
         rows, cols = self.to_isolate.pixels
-        # if self.use_raw_img:
-        #     img = self.fig.raw_img
-        # else:
-        #     img = self.fig.img
         mask = np.zeros_like(self.img, dtype=bool)
         mask[rows, cols] = True
         isolated_cc_img = np.zeros_like(self.img, dtype=np.uint8)
         isolated_cc_img[mask] = self.img[mask]
-        # if self.fig.scaling_factor:
-        #     y_dim, x_dim = img.shape
-        #     isolated_cc_img_resized = cv2.resize(isolated_cc_img_resized, (x_dim, y_dim))
-        # rows, cols = np.where(isolated_cc_img_resized > 0)
-        # mask = np.zeros_like(img, dtype=np.bool)
-        # mask[rows, cols] = True
-        # isolated_cc_img_orig = np.zeros_like(img)
-        # isolated_cc_img_orig[mask] = img[mask]
         fig_copy = deepcopy(self.fig)
-        # fig_copy.eager_cc_init = False
         fig_copy.img = isolated_cc_img
         return fig_copy
 

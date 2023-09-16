@@ -18,24 +18,20 @@ email: m.swain@me.com
 from __future__ import absolute_import
 from __future__ import division
 
-import copy
 from collections import Sequence
 from collections.abc import Collection
+import numpy as np
 from enum import Enum
 from functools import wraps
 import logging
+from typing import List, Union, Tuple
 
 import cv2
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 
-
-import numpy as np
-from configs import figure, ProcessorConfig, SegmentsConfig
-from scipy.stats import mode
-
+from configs import figure, ProcessorConfig
 from .geometry import Line, Point
-# from configs.config import ProcessorConfig, SegmentsConfig
 
 log = logging.getLogger('extract.segments')
 
@@ -138,7 +134,6 @@ class PanelMethodsMixin:
         return iter(self.panel)
 
 
-
 class Rect(object):
     """
     A rectangular region.
@@ -146,7 +141,7 @@ class Rect(object):
     """
 
     @classmethod
-    def create_megarect(cls, boxes):
+    def create_megarect(cls, boxes: List['Rect']):
         """
         Creates a large rectangle out of all constituent boxes (rectangles containing connected components)
         :param iterable boxes: list of bounding boxes to combine into a larger box
@@ -275,7 +270,6 @@ class Rect(object):
         else:
             return False
 
-    ## The schema was changed from (left, right, top bottom) to (top, left, bottom, right) below to standardize
     def __call__(self):
         return self.top, self.left, self.bottom, self.right
 
@@ -298,7 +292,14 @@ class Rect(object):
         return (other_rect.left >= self.left and other_rect.right <= self.right and
                 other_rect.top >= self.top and other_rect.bottom <= self.bottom)
 
-    def contains_point(self, point):
+    def contains_point(self, point: Union[Tuple[int], 'Point']):
+        """Returns True if a point lies inside self, else returns False
+
+        :param point: Point to probe. Either an instance of Point class or a tuple (x,y) of integers.
+        :type point: Union[Tuple[int], &#39;Point&#39;]
+        :return: _description_
+        :rtype: _type_
+        """
         x, y = point
         horz_containment = self.left <= x and x <= self.right
         vert_containment = self.top <= y and y <= self.bottom
@@ -323,7 +324,7 @@ class Rect(object):
             return NotImplemented
         return overlaps
 
-    def center_separation(self, other):
+    def center_separation(self, other: Union['Point', Tuple[int], 'Rect']) -> float:
         """ Returns the distance between the center of each graph
         :param Rect other: Another rectangle
         :return: Distance between centroids of rectangle
@@ -344,22 +345,22 @@ class Rect(object):
         length = abs(self.center[1] - y)
         return np.hypot(length, height)
 
-    def edge_separation(self, other):
+    def edge_separation(self, other: Union['Point', Tuple[int], 'Rect']) -> int:
         """Cqlculates the distance between the closest edges or corners of two rectangles or a rectangle and a point.
          If the two overlap, the distance is set to 0"""
-        ### This is wrong (
         if isinstance(other, Point):
             y, x = other
             other = Rect([y, x, y, x]) # repeat point coordinates twice
         elif isinstance(other, Sequence) and len(other) == 2:
             x, y = other
             other = Rect([y, x, y, x])
-        ##
         return self._edge_separation_rect(other)
 
-    def _edge_separation_rect(self, other_rect):
-        """Cqlculates the distance between the closest edges or corners of two rectangles. If the two overlap, the
-        distance is set to 0"""
+    def _edge_separation_rect(self, other_rect: 'Rect') -> int:
+        """Calculates the distance between the closest edges or corners of two rectangles. If the two overlap, the
+        distance is set to 0
+        :param other_rect: another rectangle to which the distance is computed
+        :type other_rect: Rect"""
         def dist(p1, p2):
             x1, y1 = p1
             x2, y2 = p2
@@ -392,7 +393,16 @@ class Rect(object):
         else:  # rectangles intersect
             return 0.
 
-    def find_relative_orientation(self, other_rect):
+    def find_relative_orientation(self, other_rect: 'Rect') -> Tuple[bool]:
+        """Returns four booleans (top, left, bottom, right) describing relative orientation
+        of self wrt to the other rect. For example [True, False, False, False] 
+        means that self is above the other rect.
+
+        :param other_rect: other rectangle object
+        :type other_rect: Rect
+        :return: tuple of four values specifying the relative orientation of the two rectangles
+        :rtype: Tuple[bool]
+        """
         t1, l1, b1, r1 = self
         t2, l2, b2, r2 = other_rect
 
@@ -403,7 +413,7 @@ class Rect(object):
 
         return top, left, bottom, right
 
-    def overlaps_vertically(self, other_rect):
+    def overlaps_vertically(self, other_rect: 'Rect') -> bool:
         """
         Return True if two `Rect` objects overlap along the vertical axis (i.e. when projected onto it), False otherwise
         :param Rect other_rect: other `Rect` object for which a condition is to be tested
@@ -411,23 +421,21 @@ class Rect(object):
         """
         return min(self.bottom, other_rect.bottom) > max(self.top, other_rect.top)
 
-    def create_crop(self, figure):
+    def create_crop(self, figure: 'Figure') -> 'Crop':
         """Creates crop from the rectangle in figure
         :return: crop containing the rectangle
         :rtype: Crop"""
         return Crop(figure, self)
 
-    def create_padded_crop(self, figure, pad_width=(10)):
+    def create_padded_crop(self, figure: 'Figure', pad_width: int=10) -> 'Crop':
         """Creates a crop from the rectangle in figure and pads it
         :return: padded crop containing the rectangle
         :rtype: Crop"""
         crop = self.create_crop(figure)
-        # img = np.pad(crop.img, pad_width=pad_width, constant_values=pad_val)
-        # crop.img = img
         crop  = crop.pad_crop(pad_width)  # adjusts the img and connected_components attributes too
         return crop
 
-    def create_extended_crop(self, figure, extension):
+    def create_extended_crop(self, figure:' Figure', extension: int) -> 'Crop':
         """Creates a crop from the rectangle and its surroundings in figure
         :return: crop containing the rectangle and its neighbourhood
         :rtype: Crop"""
@@ -436,7 +444,14 @@ class Rect(object):
         top, bottom = top - extension, bottom + extension
         return Panel((top, left, bottom, right), figure).create_crop(figure)
 
-    def compute_iou(self, other_rect):
+    def compute_iou(self, other_rect: 'Rect') -> float:
+        """Computes intersection over union (IoU) value between `self` and `other rect`.
+
+        :param other_rect: another rectangle
+        :type other_rect: Rect
+        :return: IoU value
+        :rtype: float
+        """
         xa, ya, wa, ha = self
         xb, yb, wb, hb = other_rect
         x1_inter = max(xa, xb)
@@ -457,26 +472,17 @@ class Rect(object):
         iou = area_intersection / (area_a + area_b - area_intersection)
         return iou
 
-    def reflect(self, point):
-        x, y = point
-        top, left, bottom, right = self
-        left, right = -(right - x) + x, -(left - x) + x
-        top, bottom = -(bottom - y) + y, - (top - y) + y
-
-        return Panel((int(top), int(left), int(bottom), int(right)), fig=self.fig)
-
 
 class Panel(Rect, figure.GlobalFigureMixin):
 
     @classmethod
-    def create_megapanel(cls, boxes, fig):
+    def create_megapanel(cls, boxes: List['Panel'], fig: 'Figure') -> 'Panel':
         """
         Creates a large panel out of all constituent boxes (rectangles containing connected components) and associates
         it with ``fig``
         :param iterable boxes: list of bounding boxes to combine into a larger box
         :return: a large rectangle covering all smaller rectangles
         """
-        # print('boxes:', boxes)
         top = min(rect.top for rect in boxes)
         bottom = max(rect.bottom for rect in boxes)
         left = min(rect.left for rect in boxes)
@@ -494,17 +500,17 @@ class Panel(Rect, figure.GlobalFigureMixin):
     :type coords: (int, int, int, int)
     :param fig: main figure
     :type fig: Figure
-    :param tags: tags of the panel (usually assigned by ndi.labels routine)
+    :param tags: tags of the panel (usually assigned by ndi.labels routine or similar; corresponds to pixel cluster id value)
     :type tags: int
+    :param role: role assigned to the panel in a figure, selected from the Figure Role enum
+    :type role: FigureRoleEnum
+    :param parent_panel: a larger panel that `self` is part of (if any)
+    :type parent_panel: Panel
     """
     def __init__(self, coords, fig=None, tags=None):
         Rect.__init__(self, coords)
         figure.GlobalFigureMixin.__init__(self, fig)
         self.tags = tags
-        # if fig is None:
-        #     self.fig = settings.main_figure[0]
-        # else:
-        # self.fig = fig
 
         self.role = None
         self.parent_panel = None
@@ -512,8 +518,6 @@ class Panel(Rect, figure.GlobalFigureMixin):
         self._pixel_ratio = None
         self._pixels = []
         self._zipped_pixels = []
-        # self._original_coords = None
-        # self._set_original_coords()
 
     @property
     def pixel_ratio(self):
@@ -531,6 +535,7 @@ class Panel(Rect, figure.GlobalFigureMixin):
 
     @property
     def pixels(self):
+        """All pixels belonging to `self` in `self.fig.img`"""
         if not self._pixels:
             x, y = [], []
             for tag in self.tags:
@@ -541,10 +546,10 @@ class Panel(Rect, figure.GlobalFigureMixin):
             self._zipped_pixels = set(zip(*self._pixels))
         return self._pixels
     
-    def mask_off(self, fig):
+    def mask_off(self, fig: 'Figure') -> None:
         fig.img[self.pixels] = 0
 
-    def merge_underlying_panels(self, fig):
+    def merge_underlying_panels(self, fig: 'Figure') -> 'Panel':
         """
         Merges all underlying connected components of the panel (made up of multiple dilated,
         merged connected components) to create a single, large panel.
@@ -557,14 +562,13 @@ class Panel(Rect, figure.GlobalFigureMixin):
         ccs_to_merge = [cc for cc in fig.connected_components if self.contains(cc)]
         return Rect.create_megarect(ccs_to_merge)
 
-    def in_original_fig(self, as_str=True):
+    def in_original_fig(self, as_str: bool=True) -> Union[Tuple, str]:
         """Transforms `self.coords` to the define the same panel in the main figure. If the figure has not been rescaled,
-        returns `self.coords`"""
+        returns `self.coords`. Returns either a tuple of values or a string for easier export to file."""
 
         assert self.fig is not None, "Cannot convert coordinates to original values - this panel has not been associated" \
                                      " with any figure"
         if self.fig._scaling_factor:
-            # t, l, b, r = self
             ret = list(np.rint(np.asarray(self.coords) / self.fig.scaling_factor).astype(np.int32))
         else:
             ret = self.coords
@@ -572,7 +576,15 @@ class Panel(Rect, figure.GlobalFigureMixin):
             ret = list(map(str, ret))
         return ret
 
-    def contains_any_pixel_of(self, other_panel):
+    def contains_any_pixel_of(self, other_panel: 'Panel') -> 'Panel':
+        """Checks whether `self` contains any pixel of `other_panel`. This check is more
+        sensitive than simply checking IoU between boxes.
+
+        :param other_panel: another panel, pixels of which are checked against `self.pixels`
+        :type other_panel: Panel
+        :return: True if any pixels are within both `self` and `other_panel`
+        :rtype: Panel
+        """
         if self.pixels:
             zipped_pixels = self._zipped_pixels
         if other_panel.pixels:
@@ -582,7 +594,7 @@ class Panel(Rect, figure.GlobalFigureMixin):
         return False
 
 class Figure(object):
-    """A figure img."""
+    """A class describing the processed figure."""
 
     def __init__(self, img, raw_img, img_detectron=None, eager_cc_init=True):
         """
@@ -591,6 +603,7 @@ class Figure(object):
         :param numpy.ndarray img_detectron: image loaded using the default settings, suitable for prediction in detectron
         :param bool eager_cc_init: whether the connected components should be computed eagerly (during this initialization)
         or lazily at a later stage - for optimized performance
+        :param numpy.ndarray labelled_img: an array of tags returned by the routine searching for connected components 
         """
         self._connected_components = None
         self._img = None
@@ -599,14 +612,10 @@ class Figure(object):
         self.raw_img = raw_img
         self.img_detectron = img_detectron
         self.labelled_img = None
-        # self.kernel_sizes = None
         self.single_bond_length = None
         self.width, self.height = img.shape[1], img.shape[0]
         self.center = (int(self.width * 0.5), int(self.height) * 0.5)
-
         self._scaling_factor = None
-
-        # self.set_connected_components()
 
     @property
     def img(self):
@@ -657,10 +666,6 @@ class Figure(object):
         """ Returns the Panel object for the extreme bounding box of the img
         :rtype: Panel()"""
 
-        # rows = np.any(self.img, axis=1)
-        # cols = np.any(self.img, axis=0)
-        # left, right = np.where(rows)[0][[0, -1]]
-        # top, bottom = np.where(cols)[0][[0, -1]]
         return Panel((0, 0, self.img.shape[0], self.img.shape[1]))
 
     def set_connected_components(self):
@@ -668,7 +673,6 @@ class Figure(object):
         Convenience function that tags ccs in an img and creates their Panels
         :return set: set of Panels of connected components
         """
-
         panels = []
         _, labelled, stats, _ = cv2.connectedComponentsWithStats(cv2.threshold
                                                           (self.img, *ProcessorConfig.BIN_THRESH, cv2.THRESH_BINARY)[1],
@@ -680,34 +684,7 @@ class Figure(object):
                 x2, y2 = x1 + w, y1 + h
                 panels.append(Panel((y1, x1, y2, x2), fig=self, tags=[label]))
 
-
-        # for cnt in contours:
-        #     x1, y1, w, h = cv2.boundingRect(cnt)
-        #     x2, y2 = x1 + w, y1 + h
-        #     panels.append(Panel((y1, x1, y2, x2), fig=self,))
-        # for region in regions:
-        #     y1, x1, y2, x2 = region.bbox
-        #     panels.append(Panel(x1, x2, y1, y2, fig=self, tags=region.labels - 1))  # Sets tags to start from 0
-
         self._connected_components = panels
-
-    def role_plot(self):
-        """Adds rectangles around each connected component according to its role in a figure"""
-        colors = 2*['r', 'g', 'y', 'm', 'b', 'c', 'k']
-
-        f = plt.figure()
-        ax = f.add_axes([0, 0, 1, 1])
-        ax.imshow(self.img)
-
-        for panel in self.connected_components:
-            if panel.role:
-                color = colors[panel.role.value]
-            else:
-                color = 'w'
-            rect_bbox = Rectangle((panel.left, panel.top), panel.right - panel.left, panel.bottom - panel.top,
-                                  facecolor='none', edgecolor=color)
-            ax.add_patch(rect_bbox)
-        plt.show()
 
     def resize(self, *args,  eager_cc_init=True, **kwargs):
         """Simple wrapper around opencv resize"""
@@ -727,48 +704,26 @@ class Crop(Figure):
     :type main_figure: Figure
     :param crop_params: parameters of the crop (either left, right, top, bottom tuple or Rect() with these attributes)
     :type crop_params: tuple|Rect
-    # :param padding: How much padding was added after the image was cropped -either a single value, a tuple of two pairs
-    # of values consistent with `pad_width` in numpy.pad
-    # :type padding: int|tuple((int, int),(int, int))
+    :param padding: How much padding was added after the image was cropped -either a single value, a tuple of two pairs
+    of values consistent with `pad_width` in numpy.pad
+    :type padding: int|tuple((int, int),(int, int))
     """
-    def __init__(self, main_figure, crop_params):
+    def __init__(self, main_figure: 'Figure', crop_params: Tuple[int]):
         self.main_figure = main_figure
         self.crop_params = crop_params  # (top, left, bottom, right) of the intended crop or Rect() with these attribs
         self.padding = None
         self._top_padding = 0
         self._left_padding = 0
         self.cropped_rect = None  # Actual rectangle used for the crop - different if crop_params are out of fig bounds
-        # self._img = None
-        # self.raw_img = None
-        # self.img_detectron = None
-        # self.connected_components = None
         self._crop_main_figure()
 
-        # self.set_connected_components()
-
-
-    # @property
-    # def padding(self):
-    #     return self._padding
-    #
-    # @padding.setter
-    # def padding(self, value):
-    #     if np.all(self.padding) == 0:
-    #         self.img = np.pad(self.img, value)
-    #         self._padding = value
-    #         self._top_padding = self._padding if isinstance(self._padding, int) else self._padding[0][0]
-    #         self._left_padding = self._padding if isinstance(self._padding, int) else self._padding[1][0]
-    #
-    #     else:
-    #         raise ValueError('Padding can be set only once')
-    #
-    # def __eq__(self, other):
-    #     return self.main_figure == other.main_figure and self.crop_params == other.crop_params \
-    #            and self.img == other.img
-
-
-    def pad_crop(self, pad_width):
-        """Pads crop using numpy.pad, adjusts connected components appropriately"""
+    def pad_crop(self, pad_width: Union[Sequence, int]) -> 'Crop':
+        """Pads crop using numpy.pad, adjusts connected components appropriately
+        :param pad_width: padding width which will be fed into np.pad
+        :type pad_width: Union[Sequence, int]
+        :return: returns mutated self, with its image padded
+        :rtype: Crop
+        """
 
         self.img = np.pad(self.img, pad_width=pad_width)
         self.padding = pad_width
@@ -781,7 +736,7 @@ class Crop(Figure):
 
         return self
 
-    def in_main_fig(self, element):
+    def in_main_fig(self, element: Union['Panel', 'Point']) -> Union['Panel', 'Point']:
         """
         Transforms coordinates of ``cc`` (from ``self.connected_components``) to give coordinates of the
         corresponding cc in ``self.main_figure''. Returns a new  object
@@ -794,13 +749,10 @@ class Crop(Figure):
             return y + self.cropped_rect.top - self._top_padding, x + self.cropped_rect.left - self._left_padding
 
         else:
-
             new_top = element.top + self.cropped_rect.top - self._top_padding
             new_bottom = new_top + element.height - self._top_padding
             new_left = element.left + self.cropped_rect.left - self._left_padding
             new_right = new_left + element.width - self._left_padding
-            # attrs = 'top', 'left', 'bottom', 'right'
-            # attr_vals = new_top, new_left, new_bottom, new_right
             new_element = element.__class__((new_top, new_left, new_bottom, new_right), self.main_figure)
             new_element.role = element.role
             return new_element
@@ -853,9 +805,7 @@ class Crop(Figure):
             out_detectron_img = img_detectron
 
         self.cropped_rect = Rect((top, left, bottom, right))
-        # self.img = out_img
-        # self.raw_img = out_raw_img
+
         super().__init__(out_img, out_raw_img, img_detectron=out_detectron_img)
         if img_detectron is not None:
             self._scaling_factor = self.main_figure.scaling_factor
-

@@ -15,29 +15,20 @@ from __future__ import division
 from __future__ import print_function
 from __future__ import unicode_literals
 
-import copy
 import logging
 import os
 import re
-from collections import Counter
-from typing import Sequence
+import numpy as np
+from typing import Sequence, List, Tuple, Dict
 from enum import Enum
 
 import cv2
-import numpy as np
-
 
 from configs import ExtractorConfig
-from processors import Isolator, Binariser
-from reactiondataextractor.configs import Config
-
-
-from .base import TextRegion, Candidate
-from .geometry import Point, Line
+from .base import TextRegion
 from .segments import Panel, PanelMethodsMixin, Figure
-# from reactiondataextractor.extractors.labels import Label
-log = logging.getLogger('extract.reaction')
 
+log = logging.getLogger('extract.reaction')
 parent_dir = os.path.dirname(os.path.abspath(__file__))
 r_group_correct_file = os.path.join(parent_dir, '..', 'dict', 'r_placeholders.txt')
 
@@ -46,8 +37,8 @@ class BaseReactionClass(object):
     This is a base.py reaction class placeholder
     """
 
-
 class LabelType(Enum):
+    """Specifies type of labels for R-group parsing"""
     SIMPLE = 1
     VARIANTS = 2
     UNKNOWN = 3
@@ -61,16 +52,10 @@ class LabelType(Enum):
             return LabelType.VARIANTS
         else:
             return LabelType.SIMPLE
-        # if re.match(numbers_only, label_text) or re.match(chars_only, label_text):
-        #     return LabelType.SIMPLE
-        #
-        # elif '-' in label_text:
-        #     return LabelType.VARIANTS
-        # else: re.search(r'\d[a-z]', label_text):
-        #     return LabelType.SINGLE_VARIANT
+
 
 class Diagram(BaseReactionClass, PanelMethodsMixin):
-    """This is a base.py class for chemical structures species found in diagrams (e.g. reactants and products)
+    """Class for chemical structures species found in diagrams (e.g. reactants and products)
 
     :param panel: bounding box a diagrams
     :type panel: Panel
@@ -78,6 +63,16 @@ class Diagram(BaseReactionClass, PanelMethodsMixin):
     :type labels: Label
     :param smiles: SMILES associated with a diagram
     :type smiles: str
+    :param children: Labels associated with the diagram
+    :type children: List[Label]
+    :param reaction_steps: reaction steps in which the diagram is present
+    :type reaction_steps: List[ReactionStep]
+    :param molecule: RDkit molecule generated from diagrams' SMILES. Currently unsupported.
+    :type molecule: RDkit.Chem.AllChem.Molecule
+    :param corners: all corners (carbon atoms + heteroatoms) found by the vectorisation algorithm
+    :type corners: List[Tuple[float]]
+    :param adjacency_matrix: connectivity matrix between corners found by the vectorisation algorithm
+    :type adjacency_matrix: np.ndarray
 """
 
     @classmethod
@@ -88,30 +83,19 @@ class Diagram(BaseReactionClass, PanelMethodsMixin):
 
     def __init__(self, panel, labels=None, smiles=None):
         self._panel = panel
-        # self.labels = labels
         self._smiles = smiles
         self._base_smiles = ''
-        self.smarts = []
         self.children = [] if labels is None else labels
         self.reaction_steps = []
-        self.text_chars = []
-        # self.markush_extensions = []
-        self.r_groups = []
-        self.r_group_variants = {}
-        self.r_group_placeholders = []
         self.molecule = None
         self._base_molecule = None
         self._fingerprint = None
         self._corrected = False
         self.corners = []
         self.adjacency_matrix = []
-        # self.positional_markush = False
-        self.positions_markush_groups = []
-        self.markush_freq_identifiers = []
-        self.repeating_units = []
         super().__init__()
 
-    def __eq__(self, other):
+    def __eq__(self, other) -> bool:
         if isinstance(other, Diagram):  # Only compare exact same types
             return self.panel == other.panel
         return False
@@ -141,8 +125,6 @@ class Diagram(BaseReactionClass, PanelMethodsMixin):
     def center(self):
         return self._panel.center
 
-
-
     @property
     def smiles(self):
         return self._smiles
@@ -150,14 +132,8 @@ class Diagram(BaseReactionClass, PanelMethodsMixin):
     @smiles.setter
     def smiles(self, smiles):
         self._smiles = smiles
+        # self.molecule = AllChem.MolFromSmiles(self.smiles)
 
-
-class ResolvedDiagram:
-
-    def __init__(self, smiles, label_text):
-        self.smiles = smiles
-        self.label_text = label_text
-        self.molecule = AllChem.MolFromSmiles(self.smiles)
 
 class ReactionStep(BaseReactionClass):
     """
@@ -169,6 +145,8 @@ class ReactionStep(BaseReactionClass):
     :type reactants: frozenset[Diagram]
     :param products: products of a reaction step
     :type products: frozenset[Diagram]
+    :param single_line: Whether the step lies along a single line, or is divided between two lines in an image
+    :type single_line: bool
 
     """
 
@@ -211,43 +189,42 @@ class ReactionStep(BaseReactionClass):
     def nodes(self):
         return [self.reactants, self.conditions, self.products]
 
-    def visualize(self, fig):
-        _X_SEPARATION = 50
-        elements = self.reactants + self.products + [self.arrow]
-        orig_coords = [e.panel.in_original_fig() for e in elements]
+    # def visualize(self, fig):
+    #     _X_SEPARATION = 50
+    #     elements = self.reactants + self.products + [self.arrow]
+    #     orig_coords = [e.panel.in_original_fig() for e in elements]
 
-        canvas_width = np.sum([c[3] - c[1] for c in orig_coords]) + _X_SEPARATION * (len(elements) - 1)
-        canvas_height = max([c[2] - c[0] for c in orig_coords])
+    #     canvas_width = np.sum([c[3] - c[1] for c in orig_coords]) + _X_SEPARATION * (len(elements) - 1)
+    #     canvas_height = max([c[2] - c[0] for c in orig_coords])
 
-        canvas = np.zeros([canvas_height, canvas_width])
-        x_end = 0
-        for diag in self.reactants:
-            self._place_panel_on_canvas(diag.panel, canvas,fig,  (x_end, 0))
-            orig_coords = diag.panel.in_original_fig()
-            x_end += orig_coords[3] - orig_coords[1] + _X_SEPARATION
-        self._place_panel_on_canvas(self.arrow.panel, canvas, fig, (x_end, int(canvas_height//2)))
-        orig_coords = self.arrow.panel.in_original_fig()
-        x_end += orig_coords[3] - orig_coords[1] + _X_SEPARATION
-        for diag in self.products:
-            self._place_panel_on_canvas(diag.panel, canvas, fig, (x_end, 0))
-            orig_coords = diag.panel.in_original_fig()
-            x_end += orig_coords[3] - orig_coords[1] + _X_SEPARATION
+    #     canvas = np.zeros([canvas_height, canvas_width])
+    #     x_end = 0
+    #     for diag in self.reactants:
+    #         self._place_panel_on_canvas(diag.panel, canvas,fig,  (x_end, 0))
+    #         orig_coords = diag.panel.in_original_fig()
+    #         x_end += orig_coords[3] - orig_coords[1] + _X_SEPARATION
+    #     self._place_panel_on_canvas(self.arrow.panel, canvas, fig, (x_end, int(canvas_height//2)))
+    #     orig_coords = self.arrow.panel.in_original_fig()
+    #     x_end += orig_coords[3] - orig_coords[1] + _X_SEPARATION
+    #     for diag in self.products:
+    #         self._place_panel_on_canvas(diag.panel, canvas, fig, (x_end, 0))
+    #         orig_coords = diag.panel.in_original_fig()
+    #         x_end += orig_coords[3] - orig_coords[1] + _X_SEPARATION
 
-        return canvas
+    #     return canvas
 
-    def _place_panel_on_canvas(self, panel, canvas,fig,  left_top):
+    # def _place_panel_on_canvas(self, panel, canvas,fig,  left_top):
 
-        ## Specify coords of the paste region
-        x, y = left_top
-        w, h = panel.width, panel.height
+    #     ## Specify coords of the paste region
+    #     x, y = left_top
+    #     w, h = panel.width, panel.height
 
-        ## Specify coords of the crop region
-        top, left, bottom, right = panel
+    #     ## Specify coords of the crop region
+    #     top, left, bottom, right = panel
 
-        canvas[y:y+h, x:x+w] = fig.img[top:bottom, left:right]
+    #     canvas[y:y+h, x:x+w] = fig.img[top:bottom, left:right]
 
-        # return canvas
-
+    #     # return canvas
 
 class Conditions(TextRegion):
     """
@@ -259,11 +236,19 @@ class Conditions(TextRegion):
     :type conditions_dct: dict
     :param parent_panel: reaction arrow, around which the search for conditions is performed
     :type parent_panel: SolidArrow
+    :param text: recognised text as a string
+    :type text: string
     :param diags: bounding boxes of all chemical structures found in the region
     :type diags: list[Panel]
     """
 
-    def __init__(self, panel, conditions_dct, parent_panel=None, text=None, diags=None, _prior_class=None):
+    def __init__(self, 
+                 panel: 'Panel',
+                 conditions_dct:Dict,
+                 parent_panel: 'Panel'=None,
+                 text: str=None,
+                 diags: List['Diagram']=None,
+                 _prior_class: int=None):
         self.panel = panel
         self.text = text
         self.conditions_dct = conditions_dct
@@ -275,10 +260,6 @@ class Conditions(TextRegion):
         self._diags = diags
 
         self._parent_panel = parent_panel
-        # if parent_panel:
-        #     parent_panel.children.append(self)
-
-
 
     @property
     def arrow(self):
@@ -338,7 +319,14 @@ class Conditions(TextRegion):
     def yield_(self):
         return self.conditions_dct['yield']
 
-    def merge_conditions_regions(self, other_region):
+    def merge_conditions_regions(self, other_region: 'Conditions') -> 'Conditions':
+        """Merges conditions' regions
+
+        :param other_region: another conditions region for merging
+        :type other_region: Conditions
+        :return: merged region with updated panel, text and conditions dictionary
+        :rtype: Conditions
+        """
         keys = self.conditions_dct.keys()
         new_dict = {}
         for k in keys:
@@ -374,8 +362,6 @@ class Label(TextRegion, PanelMethodsMixin):
     def __init__(self, panel, text, r_groups=None, *, _prior_class=None):
         if r_groups is None:
             r_groups = []
-        # if text is None:
-        #     text = []
         self.panel = panel
         self._text = text
         self.r_groups = r_groups
@@ -387,11 +373,6 @@ class Label(TextRegion, PanelMethodsMixin):
         self.root = None
         self.variant_indicators = None
         self.resolve_variants = False
-        # self._parent_panel = parent_panel
-
-    # @property
-    # def diagram(self):
-    #     return self._parent_panel
 
     @property
     def text(self):
@@ -429,30 +410,24 @@ class Label(TextRegion, PanelMethodsMixin):
         return False
 
 
-
-
 class BaseArrow(PanelMethodsMixin):
     """Base arrow class common to all arrows
-    :param pixels: pixels forming the arrows
-    :type pixels: list[Point] or list[(int, int)]
+    :param pixels: pixels forming the arrow
+    :type pixels: list[(int, int)]
     :param panel: bounding box of an arrow
     :type panel: Panel
     :param line: line associated with an arrow (if any)
     :type line: Line
-    :param contour: contour af an arrow
+    :param contour: contour af an arrow 
     :type contour: np.ndarray"""
 
-    def __init__(self, panel, line=None, contour=None):
-        # if not all(isinstance(pixel, Point) for pixel in pixels):
-            # self.pixels = [Point(row=coords[0], col=coords[1]) for coords in pixels]
-        # else:
+    def __init__(self, panel: 'Panel', line: 'Line'=None, contour: np.ndarray=None):
 
         self.panel = panel
         self.pixels = panel.pixels
 
         self.line = line
         self.contour = contour
-        # slope = self.line.slope
         self._center_px = None
         self.reference_pt = self.compute_reaction_reference_pt()
         self.initialize()
@@ -469,36 +444,32 @@ class BaseArrow(PanelMethodsMixin):
         top, left, bottom, right = self.panel
         return f'{self.__class__.__name__}({top, left, bottom, right})'
 
-    def merge_children(self):
-        """Merges child regions if they're close together"""
-        # TODO: This is not the exact solution, consider when i-th region gets merged with n > 1 regions
-        new_children = []
-        unmerged_idx = list(range(len(self.children)))
-        for i in range(len(self.children)):
-            for j in range(i+1, len(self.children)):
-                if self.children[i].panel.edge_separation(self.children[j].panel) < 150 and \
-                        self.children[i].arrow == self.children[j].arrow:
-                    unmerged_idx.remove(i)
-                    unmerged_idx.remove(j)
-                    new_children.append(self.children[i].merge_conditions_regions(self.children[j]))
-        for i in unmerged_idx:
-            new_children.append(self.children[i])
+    # def merge_children(self):
+    #     """Merges child regions if they're close together"""
+    #     new_children = []
+    #     unmerged_idx = list(range(len(self.children)))
+    #     for i in range(len(self.children)):
+    #         for j in range(i+1, len(self.children)):
+    #             if self.children[i].panel.edge_separation(self.children[j].panel) < 150 and \
+    #                     self.children[i].arrow == self.children[j].arrow:
+    #                 unmerged_idx.remove(i)
+    #                 unmerged_idx.remove(j)
+    #                 new_children.append(self.children[i].merge_conditions_regions(self.children[j]))
+    #     for i in unmerged_idx:
+    #         new_children.append(self.children[i])
 
-    def initialize(self):
+    def initialize(self) -> None:
         """Given `pixels` and `panel` attributes, this method checks if other (relevant) initialization attributes
         have been precomputed. If not, these should be computed and set accordingly."""
-        # if self.line is None:
-            # self.line = Line.approximate_line(self.pixels[0], self.pixels[-1])
-
         if self.contour is None:
             img = np.zeros_like(self.panel.fig.img)
             img[self.panel.pixels] = 255
             cnt, _ = cv2.findContours(img,
-                                      ExtractorConfig.CURLY_ARROW_CNT_MODE, ExtractorConfig.CURLY_ARROW_CNT_METHOD)
+                                      ExtractorConfig.ARROW_CNT_MODE, ExtractorConfig.ARROW_CNT_METHOD)
             assert len(cnt) <=2
             self.contour = cnt
 
-    def compute_reaction_reference_pt(self):
+    def compute_reaction_reference_pt(self) -> Tuple[float]:
         """Computes a reference point for a reaction step. This point alongside arrow's center point is used to decide
         whether a diagram belongs to reactants or products of a step (by comparing pairwise distances).
         This reference point is a centre of mass in an eroded arrow crop (erosion further moves the original centre of
@@ -522,34 +493,22 @@ class BaseArrow(PanelMethodsMixin):
         row, col = row + top, col + left        
         return col, row  # x, y
 
-    # def sort_pixels(self):
-    #     """
-    #     Simple pixel sort.
-    #     Sorts pixels by column in all arrows.
-    #     :return:
-    #     """
-    #     self.pixels.sort(key=lambda pixel: pixel.col)
-
-
 
 class SolidArrow(BaseArrow):
     """
     Class used to represent simple solid reaction arrows.
-    :param pixels: pixels forming the arrows
-    :type pixels: list[Point]
     :param line: line found by Hough transform, underlying primitive,
     :type line: Line
     :param panel: bounding box of an arrow
-    :type panel: Panel"""
+    :type panel: Panel
+    :param contour: countour of the arrow
+    :type contour: np.ndarray"""
 
-    def __init__(self, panel, line=None, contour=None):
+    def __init__(self, panel: 'Panel', line: 'Line'=None, contour: np.ndarray=None):
 
         self.line = line
         self.contour = contour
-        # self.react_side = None
-        # self.prod_side = None
         super(SolidArrow, self).__init__(panel)
-        # self.sort_pixels()
 
     @property
     def is_vertical(self):
@@ -559,8 +518,6 @@ class SolidArrow(BaseArrow):
     def slope(self):
         return self.line.slope
 
-
-
     def __eq__(self, other):
         if not isinstance(other, BaseArrow):
             return False
@@ -569,34 +526,20 @@ class SolidArrow(BaseArrow):
     def __hash__(self):
         return hash(pixel for pixel in self.pixels)
 
-    # def sort_pixels(self):
-    #     """
-    #     Simple pixel sort.
-    #     Sorts pixels by row in vertical arrows and by column in all other arrows
-    #     :return:
-    #     """
-    #     if self.is_vertical:
-    #         self.pixels.sort(key=lambda pixel: pixel.row)
-    #     else:
-    #         self.pixels.sort(key=lambda pixel: pixel.col)
-
 
 class CurlyArrow(BaseArrow):
-
-    def __init__(self, panel, contour=None, line=None):
-        """Class used to represent curly arrows. Does not make use of the ``line`` attribute,
-        and overrides the ``initialize`` method to account for this"""
+    """Class used to represent curly arrows. Does not make use of the ``line`` attribute,
+    and overrides the ``initialize`` method to account for this
+    :param line: None
+    :type line: None
+    :param panel: bounding box of an arrow
+    :type panel: Panel
+    :param contour: countour of the arrow
+    :type contour: np.ndarray"""
+    def __init__(self, panel: 'Panel', contour: np.ndarray=None, line: None=None):
         self.contour = contour
         super().__init__(panel)
         self.line = None
-
-    # def initialize(self):
-    #     if self.contour is None:
-    #         isolated_arrow_fig = Isolator(None, self, isolate_mask=True).process()
-    #         cnt, _ = cv2.findContours(isolated_arrow_fig.img,
-    #                                   ExtractorConfig.CURLY_ARROW_CNT_MODE, ExtractorConfig.CURLY_ARROW_CNT_METHOD)
-    #         assert len(cnt) == 1
-    #         self.contour = cnt[0]
 
 
 class ResonanceArrow(BaseArrow):
@@ -606,13 +549,6 @@ class ResonanceArrow(BaseArrow):
         self.line = line
         self.contour = contour
         super().__init__(panel)
-        # self.sort_pixels()
-
-    # def initialize(self):
-    #     if self.line is None:
-    #         pass
-    #     if self.contour is None:
-    #         pass
 
 
 class EquilibriumArrow(BaseArrow):
@@ -622,10 +558,3 @@ class EquilibriumArrow(BaseArrow):
         self.line = line
         self.contour = contour
         super().__init__(panel)
-        # self.sort_pixels()
-
-    # def initialize(self):
-    #     if self.line is None:
-    #         pass
-    #     if self.contour is None:
-    #         pass

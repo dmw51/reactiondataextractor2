@@ -1,39 +1,39 @@
 """This module contains classes and routines associated with manipulating smiles, including resolving R-groups into
 individual chemical compounds"""
-import copy
-import os
-import re
-from collections import Counter
-from itertools import product
-
-import numpy as np
-
+from typing import List
 
 from utils.utils import erase_elements, euclidean_distance
 from utils.vectorised import DiagramVectoriser
 
 from reactiondataextractor.models import BaseExtractor
-from reactiondataextractor.models.reaction import ResolvedDiagram
-# parent_dir = os.path.dirname(os.path.abspath(__file__))
-# r_group_correct_file = os.path.join(parent_dir, '..', 'dict', 'r_placeholders.txt')
 
 class SmilesExtractor(BaseExtractor):
-    def __init__(self, diagrams, recogniser):
+    """Wrapper class. Wraps the main Optical Chemical Structure Recognition class.
+    
+    :param diagrams: List of detected chemical diagrams
+    :type diagrams: List[Diagram]
+    :param recogniser: instance of the wrapped OCSR class that performs the recognition
+    :type recogniser: DecimerRecogniser
+    :param vectoriser: instance of a vectorisation class"""
+    def __init__(self, diagrams: List['Diagram'], recogniser: 'DecimerRecogniser'):
         self.diagrams = diagrams
         self.recogniser = recogniser
         self.vectoriser = DiagramVectoriser()
-        # self._corners = None
-        # self._adjacency_matrix = None
 
-
-    def extract(self):
-        """Takes in diagrams, uses the recogniser, then resolves R groups into individual smiles """
+    def extract(self) -> None:
+        """This method is a wrapper method that call the OCSR engine"""
         for diag in self.diagrams:
             self.vectoriser.diag = diag
-            self.vectoriser.create_vectorised_diagram_graph()
+            # self.vectoriser.create_vectorised_diagram_graph()
             self.recognise(diag)
 
-    def recognise(self, diag):
+    def recognise(self, diag) -> None:
+        """This is the recognition method. Image patch corresponding to the input diagram 
+        is preprocessed, fed through the model, and detokenised to give SMILES representation. 
+        Updates `smiles` attribute of the diagram.
+        :param diag: input chemical diagram for optical recognition
+        :type diag: Diagram
+        """
         crop = diag.crop
         lone_groups = []
 
@@ -41,4 +41,3 @@ class SmilesExtractor(BaseExtractor):
         predicted_tokens = self.recogniser.model(chemical_structure)
         predicted_SMILES = self.recogniser.detokenize_output(predicted_tokens)
         diag.smiles = predicted_SMILES
-

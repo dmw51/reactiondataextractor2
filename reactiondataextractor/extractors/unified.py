@@ -6,6 +6,7 @@ import numpy as np
 import json
 import os
 import re
+from typing import List, Tuple, Union
 import warnings
 
 import cv2
@@ -18,7 +19,6 @@ from detectron2.structures import Instances, Boxes
 import torch
 from torch import Tensor
 
-# from extractors.lambda_wrapper import Detectron2Adapter
 from models.exceptions import NoDiagramsFoundException
 from reactiondataextractor.models import BaseExtractor, Candidate
 from reactiondataextractor.models.reaction import Label, Conditions, Diagram, CurlyArrow
@@ -29,7 +29,6 @@ from reactiondataextractor.utils.utils import dilate_fig, erase_elements, find_r
     compute_ioa, lies_along_arrow_normal, pixel_ratio
 
 parent_dir = os.path.dirname(os.path.abspath(__file__))
-# superatom_file = os.path.join(parent_dir, '..', 'dict', 'superatom.txt')
 superatom_file = os.path.join(parent_dir, '..', 'dict', 'filter_superatoms.txt')
 cfg = get_cfg()
 cfg.MODEL.DEVICE = 'cpu'
@@ -38,7 +37,10 @@ cfg.MODEL.DEVICE = 'cpu'
 class UnifiedExtractor(BaseExtractor):
     """The main object detection model. Combines an underlying detectron2 object detection model, as well
     as the individual diagram, labels and conditions extractors"""
-    def __init__(self, fig, arrows, use_tiler=True):
+    def __init__(self, 
+                 fig:'Figure',
+                 arrows: List['BaseArrow'],
+                 use_tiler: bool=True):
         """
         :param fig: Analysed figure
         :type fig: Figure
@@ -60,7 +62,6 @@ class UnifiedExtractor(BaseExtractor):
             0: Diagram,
             1: Conditions,
             2: Label
-
         }
 
     @property
@@ -82,6 +83,7 @@ class UnifiedExtractor(BaseExtractor):
 
     @fig.setter
     def fig(self, val):
+        """Sets the `fig` attribute for this object, as well as all models and constituent extractors for consistency"""
         self._fig = val
         self.model.fig = val
         self.diagram_extractor._fig = val
@@ -97,13 +99,15 @@ class UnifiedExtractor(BaseExtractor):
         self._diags_only = value
         self.diagram_extractor._diags_only = value
 
-    def extract(self, assert_diags_only=False, report_raw_results=False):
+    def extract(self,
+                report_raw_results:bool=False):
         """The main extraction method.
-
-        Processes outputs from the object detection model by delegating to the posprocessing classes and methods.
-        Postprocesses diagrams using dilation, then uses these along with arrows to filter viable labels and conditions
-        Finally, matches diagrams inside conditions regions with appropriate arrows to extend their conditions regions
-        appropriately
+        Delegates extraction to the inner model instance.
+        Processes outputs from the object detection model by delegating to the inner extractors and methods.
+        Postprocesses diagrams using dilation, then uses these along with arrows to postprocess viable labels and conditions
+        :param report_raw_results: a helper flag which can be used for evaluation purposes. 
+        When set, the raw results from the object detection models are returned additionally to the main return values
+        :type report_raw_results: bool
         return: postprocessed diagrams, conditions, and labels
         rtype: tuple[list]"""
         boxes, classes = self.model.detect()
@@ -113,6 +117,7 @@ class UnifiedExtractor(BaseExtractor):
         diags = self.postprocess_diagrams(out_diag_boxes)
         if not diags:
             raise NoDiagramsFoundException
+        
         text_regions = [TextRegionCandidate(box, class_) for box, class_ in zip(boxes, classes)
                         if self._class_dict[class_] in [Label, Conditions]]
         conditions, labels = self.postprocess_text_regions(text_regions)
@@ -120,15 +125,17 @@ class UnifiedExtractor(BaseExtractor):
             self.set_parents_for_text_regions(conditions, self.all_arrows)
         if labels:
             self.set_parents_for_text_regions(labels, diags)
-        self.clean_up_diag_label_matchings(diags)
+        self._clean_up_diag_label_matchings(diags)
+        
         if not self.diags_only:
             self.add_diags_to_conditions(diags)
+            
         self._extracted = diags, conditions, labels
         if report_raw_results:
             return diags, conditions, labels,  (boxes, classes)
         return diags, conditions, labels
 
-    def add_diags_to_conditions(self, diags):
+    def add_diags_to_conditions(self, diags: List['Diagram']):
         """Adds diagrams to conditions regions where applicable. This is done by assessing the relationship
         between diagrams and arrows
         :param diags: All extracted diagrams
@@ -143,7 +150,7 @@ class UnifiedExtractor(BaseExtractor):
                     else:
                         arrow.children.append(Conditions(diag.panel,None,None,None,diags=[diag]))
 
-    def clean_up_diag_label_matchings(self, diags):
+    def _clean_up_diag_label_matchings(self, diags):
         diags_multiple_labels = [d for d in diags if len(d.children) > 1]
         if not diags_multiple_labels:
             return
@@ -161,7 +168,7 @@ class UnifiedExtractor(BaseExtractor):
                     d.children.remove(label)
                     second_closest.children.append(label)
 
-    def postprocess_diagrams(self, out_diag_boxes):
+    def postprocess_diagrams(self, out_diag_boxes: List['Diagram']) -> List['Diagram']:
         """Postprocesses diagram bounding boxes from the detectron model.
         First, select a prior as the largest connected component inside each detection,
         Then filter false positives by considering overlap with arrows
@@ -176,16 +183,18 @@ class UnifiedExtractor(BaseExtractor):
         diags = self.diagram_extractor.extract()
         return diags
 
-    def postprocess_text_regions(self, text_regions):
+    def postprocess_text_regions(self, 
+                                 text_regions: List['TextRegionCandidate']) -> Tuple[List['Conditions'], List['Label']]:
         """Postprocesses conditions and labels detections.
         First, bounding boxes are adjusted to match connected component boundaries exactly.
         Then, they are conditionally reclassified, and duplicated removed
         Conditions are further cleaned if they aren't matched to any arrow
-        The two lists are then passed to their individual extractors for text parsing
-        Finally, detections with poor text detections are filtered
+        An image is then created where all arrows and chemical diagrams are erased. This image is used for text OCR process.
+        The two lists are then passed to their individual extractors for text recognition and parsing
+        Finally, detections with poor text detection confidence are filtered out
         :param text_regions: detected text regions (labels + conditions)
-        :type text_regions: list[TextRegionCandidate]
-        :rtype: tuple[list]"""
+        :type text_regions: List[TextRegionCandidate]
+        :rtype: Tuple[List['Conditions'], List['Label']"""
         adjusted_candidates = self.adjust_bboxes(text_regions)
         if not self.diags_only:
             conditions, labels = self.reclassify(adjusted_candidates)
@@ -195,22 +204,38 @@ class UnifiedExtractor(BaseExtractor):
             labels = adjusted_candidates
             conditions = []
         
-        panels_to_mask = [d.panel for d in self.diagram_extractor.extracted] + [a.panel for a in self._arrows]
-        self.masked_fig = erase_elements(self.fig, panels_to_mask, copy_fig=False)
-        ocr_fig = self.isolate_ocr_regions()
-        self.conditions_extractor.ocr_fig = ocr_fig
-        self.label_extractor.ocr_fig = ocr_fig
-        
+        self._set_ocr_fig()
+
         conditions, labels = [self.extract_elements(group, extractor) for group, extractor
                               in zip([conditions, labels], [self.conditions_extractor, self.label_extractor])]
+        
         if not self.diags_only:
-            self.conditions_extractor._extracted = self.filter_text_false_positives(conditions, self.diagram_extractor.extracted)
-        self.label_extractor._extracted = self.filter_text_false_positives(labels, self.diagram_extractor.extracted)
+            self.conditions_extractor._extracted = self._filter_text_false_positives(conditions, self.diagram_extractor.extracted)
+        self.label_extractor._extracted = self._filter_text_false_positives(labels, self.diagram_extractor.extracted)
 
         return self.conditions_extractor.extracted, self.label_extractor.extracted
 
-    def set_parents_for_text_regions(self, text_regions, possible_parents):
+    def _set_ocr_fig(self):
+        panels_to_mask = [d.panel for d in self.diagram_extractor.extracted] + [a.panel for a in self._arrows]
+        self.masked_fig = erase_elements(self.fig, panels_to_mask, copy_fig=False)
+        to_isolate = [cc for cc in self.masked_fig.connected_components]
+        all_coords = np.array([cc.coords for cc in to_isolate])
+        all_coords = (all_coords / self.fig.scaling_factor).astype(np.int32)
+        img_canvas = np.zeros_like(self.masked_fig.raw_img)
+        for coord in all_coords:
+            top, left, bottom, right = coord
+            img_canvas[top:bottom+1, left:right+1] = self.masked_fig.raw_img[top:bottom+1, left:right+1]
+        img_canvas = cv2.resize(img_canvas, (self.masked_fig.img.shape[1], self.masked_fig.img.shape[0]))
+        ocr_fig = Figure(img_canvas, self.masked_fig.raw_img)
+
+        self.conditions_extractor.ocr_fig = ocr_fig
+        self.label_extractor.ocr_fig = ocr_fig
+        
+    def set_parents_for_text_regions(self, 
+                                     text_regions: List['TextRegionCandidate'], 
+                                     possible_parents: List[Union['BaseArrow', 'Diagram']]):
         """Assigns each text region to a diagram (for labels) or arrow (for conditions) parent object based on distance
+        and relative orientation between the child and potential parent
         :param text_regions: detected text regions (labels or conditions)
         :type text_regions: list[Conditions|Label]
         :param possible_parents: list of possible parent regions (arrows for conditions, and diagrams for labels
@@ -221,13 +246,14 @@ class UnifiedExtractor(BaseExtractor):
             orientations.append(closest_possible_parent.panel.find_relative_orientation(region.panel))
         num_overlapping = len([orient for orient in orientations if sum(orient)== 0])
         orientations = list(zip(*orientations))
+        
+        # if half of labels are below their nearest possible parent, use this information to deduce the correct parent
         below_panel = sum(orientations[2]) > 0.5 * (len(text_regions) - num_overlapping)
         for region in text_regions:
             region.set_nearest_as_parent(possible_parents, below_panel=below_panel)
 
-
-    def filter_text_false_positives(self, text_regions, diags):
-        """Filter out parts of diagrams (usually superatom labels) falsely marked as conditions or labels, and plus signs.
+    def _filter_text_false_positives(self, text_regions, diags):
+        """Filter out false positives: parts of diagrams (usually superatom labels) falsely marked as conditions or labels, and plus signs.
         :param text_regions: detected text regions (labels or conditions)
         :type text_regions: list[Conditions|Label]
         :param diags: detected diagrams
@@ -272,8 +298,8 @@ class UnifiedExtractor(BaseExtractor):
 
         return filtered_regions
 
-    def clean_conditions(self, conditions):
-        """Cleans poor conditions prediction which cover large image patches or cannot be associated with any arrow.
+    def clean_conditions(self, conditions: List['Conditions']) -> List['Conditions']:
+        """Cleans poor conditions predictions which cover large image patches or cannot be associated with any arrow.
         :param conditions: postprocessed conditions regions
         :type conditions: list[Conditions]
         """
@@ -299,11 +325,10 @@ class UnifiedExtractor(BaseExtractor):
         self.label_extractor.plot_extracted(ax)
         self.conditions_extractor.plot_extracted(ax)
 
-    def remove_duplicates(self, panels):
+    def remove_duplicates(self, panels: List[Union['Label','Conditions']]) -> List['Diagram']:
         """Removes duplicate panels inside `group`. In this context, duplicates are all panels which cover the same
         region, whether an entire region or just a part of it. In such cases, the biggest panel is selected.
 
-        The panels are first grouped into sets of overlapping objects and then removed on a group-by-group basis
         :param panels: panels to be analysed
         :type panels: list[Panel]
         :return: filtered, unique panels
@@ -337,18 +362,21 @@ class UnifiedExtractor(BaseExtractor):
 
         return filtered
 
-    def extract_elements(self, elements, extractor):
+    def extract_elements(self, 
+                         elements: List[Union['Label', 'Conditions']],
+                         extractor: Union['LabelExtractor', 'ConditionsExtractor']):
         """Wrapper method used to set priors to an extractor prior to calling its main extract method
         :param elements: priors/elements to perform extraction on
-        :type: list[Diagram|Label|Conditions]
+        :type: list[Label|Conditions]
         :param extractor: extractor to be used for extraction
         :type extractor: BaseExtractor
         :return: extracted elements
-        :rtype: list[Diagram|Label|Conditions"""
+        :rtype: list[Label|Conditions"""
         extractor.priors = elements
         return extractor.extract()
 
-    def select_diag_prior(self, bbox):
+    def select_diag_prior(self, 
+                          bbox: np.ndarray) -> np.array:
         """Selects diagram prior as the largest connected component bounded by the ``bbox``
         :param bbox: detection from the object detection model
         :type bbox: np.ndarray
@@ -363,7 +391,8 @@ class UnifiedExtractor(BaseExtractor):
             return None
         return bbox_crop.in_main_fig(prior)
 
-    def filter_diag_false_positives(self, diag_priors):
+    def filter_diag_false_positives(self, 
+                                    diag_priors: List[Panel]) -> List['Diagram']:
         """Filters diagram false positives by comparing with all extracted arrows. If a given region was marked
         as an arrow by the arrow extraction model, then it is removed from a list of potential diagrams
         :param diag_priors: all diagram priors
@@ -379,7 +408,8 @@ class UnifiedExtractor(BaseExtractor):
 
         return filtered_diags
 
-    def adjust_bboxes(self, region_candidates):
+    def adjust_bboxes(self, 
+                      region_candidates: List[np.ndarray]) -> List[np.ndarray]:
         """Adjusts bboxes inside each of region_candidates by restricting them to cover connected components fully contained within crops bounded
         by the bboxes
         :param region_candidates: detections from the object detection model
@@ -393,22 +423,18 @@ class UnifiedExtractor(BaseExtractor):
             if any([s == 0 for s in crop.img.shape]):
                 continue
             relevant_ccs = [crop.in_main_fig(cc) for cc in crop.connected_components]
-            # unassigned_relevant_ccs = [cc for cc in relevant_ccs if cc.role is None]  # Previously unassigned ccs
-            # if unassigned_relevant_ccs: # Remove overlaps with other ccs
-            #     cand.panel = Panel.create_megapanel(unassigned_relevant_ccs, self.fig)
-            #     adjusted.append(cand)
-            if relevant_ccs: # if another cc covers this one entirely, don't remove overlaps
+            if relevant_ccs:
                 cand.panel = Panel.create_megapanel(relevant_ccs, self.fig)
                 adjusted.append(cand)
 
         return adjusted
 
-    def reclassify(self, candidates):
+    def reclassify(self, candidates: List[Union['Conditions', 'Label']]):
         """Attempts to reclassify labels and conditions candidates based on proximity to arrows and diagrams.
-        If a candidate is close to an arrow, then it is reclassified as a conditions region. Conversely, if it is close
-        to a diagram, then it is classified as a labels. Finally, if it is not within a given threshold distance, it is
-        instantiated based on the prior labels given by the unified detection model. Assigns the closest of these panels
-        as a parent panel
+        If a candidate is close to an arrow and has the correct relative orientation, then it is reclassified as a conditions region. 
+        Conversely, if it is close to a diagram, then it is classified as a labels. Finally, if it is not within a given threshold distance 
+        or does not have expected relative orientation, it is instantiated based on the prior labels given by the unified detection model. 
+        Assigns the closest of these panels as a parent panel
         :param candidates: analysed text region predictions
         :type candidates: list[Conditions|Label]
         :return: textual elements with their final classes
@@ -421,9 +447,6 @@ class UnifiedExtractor(BaseExtractor):
             closest_diag = self._find_closest(cand, self.diagram_extractor.extracted)
             cand_class = self._adjust_class(cand, ({'arrow': closest_arrow, 'diag': closest_diag}))
 
-            # cand.set_parent_panel({'arrow': closest_arrow, 'diag': closest_diag}, cand_class)
-            ## Try OCR on all of them, then postprocess accordingly and instantiate?
-            # reclassified.append(cand_class(**cand.pass_attributes()))
             if cand_class == Conditions:
                 conditions.append(cand)
             else:
@@ -439,8 +462,6 @@ class UnifiedExtractor(BaseExtractor):
         if seps['arrow'] <= seps['diag'] and seps['arrow'] < thresh_reclassification_dist:
             if lies_along_arrow_normal(closest['arrow'], obj):
                 class_ = Conditions
-
-
 
         elif seps['diag'] < seps['arrow'] and seps['diag'] < thresh_reclassification_dist:
             ## Adjust to labels if it's somewhere below the diagram
@@ -523,42 +544,35 @@ class UnifiedExtractor(BaseExtractor):
         dists = [(other_obj, obj.edge_separation(other_obj)) for other_obj in other_objects]
         return sorted(dists, key=lambda elem: elem[1])[0][0]
 
-    def _separate_labels_conditions(self, objects):
-        conditions, labels =[], []
-        for o in objects:
-            if isinstance(o, Conditions):
-                conditions.append(o)
-            elif isinstance(o, Label):
-                labels.append(o)
-        return conditions, labels
+    # def _place_panel_on_canvas(self, panel, canvas,fig,  left_top):
 
-    def _place_panel_on_canvas(self, panel, canvas,fig,  left_top):
+    #     ## Specify coords of the paste region
+    #     x, y = left_top
+    #     w, h = panel.width, panel.height
 
-        ## Specify coords of the paste region
-        x, y = left_top
-        w, h = panel.width, panel.height
+    #     ## Specify coords of the crop region
+    #     top, left, bottom, right = panel
 
-        ## Specify coords of the crop region
-        top, left, bottom, right = panel
-
-        canvas[y:y+h, x:x+w] = fig.img[top:bottom, left:right]
-        
-    def isolate_ocr_regions(self):
-        to_isolate = [cc for cc in self.masked_fig.connected_components]
-        all_coords = np.array([cc.coords for cc in to_isolate])
-        all_coords = (all_coords / self.fig.scaling_factor).astype(np.int32)
-        img_canvas = np.zeros_like(self.masked_fig.raw_img)
-        for coord in all_coords:
-            top, left, bottom, right = coord
-            img_canvas[top:bottom+1, left:right+1] = self.masked_fig.raw_img[top:bottom+1, left:right+1]
-        img_canvas = cv2.resize(img_canvas, (self.masked_fig.img.shape[1], self.masked_fig.img.shape[0]))
-        return Figure(img_canvas, self.masked_fig.raw_img)
+    #     canvas[y:y+h, x:x+w] = fig.img[top:bottom, left:right]
 
 
 class DiagramExtractor(BaseExtractor):
-    """Diagram extraction class"""
+    """Diagram extraction class. This class is responsible for refining the initial object detection outputs.
+    It takes the priors, and performs dilation around them to complete the chemical diagrams"""
 
-    def __init__(self, fig, diag_priors, arrows):
+    def __init__(self, fig: 'Figure',
+                 diag_priors: List[Panel], 
+                 arrows: List['BaseArrow']):
+        """Init method. Requires the main figure, panels containing the priors, and all arrows from the
+        arrow extraction model
+
+        :param fig: Figure containing the whole reaction scheme
+        :type fig: Figure
+        :param diag_priors: List of diagram prior panels
+        :type diag_priors: List[Panel]
+        :param arrows: all arrows detected in the reaction scheme
+        :type arrows: List['BaseArrow']
+        """
         super().__init__(fig)
         self.diag_priors = diag_priors
         self.diags = None
@@ -574,7 +588,6 @@ class DiagramExtractor(BaseExtractor):
         :rtype: list[Diagram]"""
         assert self.diag_priors is not None, "Diag priors have not been set"
         self.fig.dilation_iterations = self._find_optimal_dilation_extent()
-        # self.fig.set_roles(self.diag_priors, FigureRoleEnum.DIAGRAMPRIOR)
 
         diag_panels = self.complete_structures()
         diags = [Diagram(panel=panel) for panel in diag_panels]
@@ -596,7 +609,7 @@ class DiagramExtractor(BaseExtractor):
                                       facecolor=(52/255, 0, 103/255), edgecolor=(6/255, 0, 99/255), alpha=0.4)
                 ax.add_patch(rect_bbox)
 
-    def complete_structures(self):
+    def complete_structures(self) -> List['Diagram']:
         """
         Dilates a figure and uses priors to find complete chemical structures (prior + superatoms etc.).
 
@@ -608,9 +621,8 @@ class DiagramExtractor(BaseExtractor):
         dilated_structure_panels, other_ccs = self.find_dilated_structures()
         structure_panels = self._complete_structures(dilated_structure_panels)
         self._assign_diagram_parts(structure_panels, other_ccs)  # Assigns cc roles
-        # temp = copy.copy(structure_panels)
-        # simple filtering to account for potential multiple priors corresponding to the same diagram
         
+        # simple filtering to account for potential multiple priors corresponding to the same diagram
         duplicated = []
         for idx_to_remove, panel1 in enumerate(structure_panels):
             for panel2 in structure_panels:
@@ -622,15 +634,15 @@ class DiagramExtractor(BaseExtractor):
 
         return list(set(unique))
 
-    def find_dilated_structures(self):
+    def find_dilated_structures(self) -> Tuple[List[Panel]]:
         """
         Finds dilated structures by first dilating the image several times depending on the density of features.
 
-        For each backbone, the figure is dilated a number of times dependent n the density of features.
+        For each backbone, the figure is dilated a number of times dependent on the density of features.
         Dilated structure panel is then found based on comparison with the original prior. A crop is made for each
         structure. If there is more than one connected component that is fully contained within the crop,
         it is noted and this information used later when the small disconnected ccs are assigned roles
-        (This additional connected component is likely a labels).
+        (This additional connected component is likely a label).
         :return: (dilated_structure_panels, other_ccs) pair of collections containing the dilated panels and
         separate ccs present within these dilated panels
         :rtype: tuple of lists
@@ -664,7 +676,7 @@ class DiagramExtractor(BaseExtractor):
             dilated_structure_panels.append(dilated_structure_panel)
         return dilated_structure_panels, other_ccs
 
-    def _assign_diagram_parts(self, structure_panels, cno_ccs):
+    def _assign_diagram_parts(self, structure_panels: List[Panel], cno_ccs:List[Panel]) -> None:
         """
         Assigns roles to small disconnected diagram parts.
 
@@ -693,9 +705,8 @@ class DiagramExtractor(BaseExtractor):
 
             [setattr(fig_cc, 'role', None) for fig_cc in fig_ccs]
 
-        # log.debug('Roles of structure auxiliaries have been assigned.')
 
-    def _complete_structures(self, dilated_structure_panels):
+    def _complete_structures(self, dilated_structure_panels: List[Panel]) -> List[Panel]:
         """Uses ``dilated_structure_panels`` to find all constituent ccs of each chemical structure.
 
         Finds connected components belonging to a chemical structure and creates a large panel out of them. This
@@ -712,7 +723,7 @@ class DiagramExtractor(BaseExtractor):
                 structure_panels.append(parent_structure_panel)
         return structure_panels
 
-    def _find_optimal_dilation_extent(self):
+    def _find_optimal_dilation_extent(self) -> int:
         """
         Use structural prior to calculate local skeletonised-pixel ratio and find optimal dilation kernel extent
         (in terms of number of iterations) for structural segmentation. Each diagram priod is assigned its own
@@ -728,10 +739,7 @@ class DiagramExtractor(BaseExtractor):
             horz_ext = max(horz_ext, ExtractorConfig.DIAG_DILATION_EXT)
             vert_ext = max(vert_ext, ExtractorConfig.DIAG_DILATION_EXT)
             crop_rect = Rect((top - vert_ext, left - horz_ext, bottom + vert_ext, right + horz_ext ))
-            # p_ratio = skeletonize_area_ratio(self.fig, crop_rect)
             p_ratio = pixel_ratio(img, crop_rect)
-            #print(p_ratio)
-            # log.debug(f'found in-crop skel_pixel ratio: {p_ratio}')
 
             if p_ratio >= 0.03:
                 n_iterations = 4
@@ -745,13 +753,11 @@ class DiagramExtractor(BaseExtractor):
 
 class TextRegionCandidate(Candidate, PanelMethodsMixin):
     """This class is used to represent regions which consist of text and contain either labels or reaction conditions.
-    This is determined at a later stage and attributes from each object are transferred to the new instances. In the
-    pipeline, outputs marked by the unified model as conditions or labels are instantiated as objects of this class"""
+    In the pipeline, outputs marked by the unified model as conditions or labels are instantiated as objects of this class"""
 
     def __init__(self, bbox, class_):
         self.panel = Panel(bbox)
         self._prior_class = class_
-        # self.parent_panel = None
 
 
 class Detectron2Adapter:
@@ -763,16 +769,12 @@ class Detectron2Adapter:
     cfg.merge_from_file(model_zoo.get_config_file("COCO-Detection/faster_rcnn_X_101_32x8d_FPN_3x.yaml"))
     cfg.MODEL.DEVICE = ExtractorConfig.DEVICE
     cfg.MODEL.WEIGHTS = ExtractorConfig.UNIFIED_EXTR_MODEL_WT_PATH
-    # model_zoo.get_checkpoint_url("COCO-Detection/faster_rcnn_X_101_32x8d_FPN_3x.yaml")  # Let training initialize from model zoo
-    # cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST = 0.2  # set a custom testing threshold
     cfg.MODEL.ROI_HEADS.NUM_CLASSES = 3
     cfg.MODEL.ANCHOR_GENERATOR.SIZES = [[8, 16], [16, 32], [32, 64], [64, 128], [256, 512]]
-    # cfg.MODEL.ANCHOR_GENERATOR.SIZES = [[32, 64], [64, 128], [128, 256], [128, 256], [256, 512]]
     cfg.MODEL.ROI_HEADS.BATCH_SIZE_PER_IMAGE = 512
     cfg.MODEL.ROI_HEADS.NUM_CLASSES = 3
-    # cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST = ExtractorConfig.UNIFIED_PRED_THRESH
 
-    def __init__(self, fig, use_tiler=True):
+    def __init__(self, fig: Figure, use_tiler:bool=True):
         """
         :param fig: Analysed figure
         :type fig: Figure
@@ -783,7 +785,7 @@ class Detectron2Adapter:
         self.fig = fig
         self.use_tiler = use_tiler
 
-    def detect(self):
+    def detect(self) -> Tuple[np.ndarray]:
         """Detects the objects and applies postprocessing (changes the order of coordinates to match pipeline's
         convention and rescales according to the image size used in the main pipeline)
         :return: postprocessed detections
@@ -839,16 +841,18 @@ class Detectron2Adapter:
         #     plt.show()
         return pred_boxes, pred_classes,
 
-    def adjust_coord_order_detectron(self, boxes):
+    def adjust_coord_order_detectron(self, boxes:np.ndarray) -> np.ndarray:
         """Adjusts order of coordinates to the expected format
 
         Detectron outputs boxes with coordinates (x1, y1, x2, y2), however the expected
         format is (top, left, bottom, right) i.e. (y1, x1, y2, x2). This function switches
-        the coordinates to achieve consistency"""
+        the coordinates to achieve consistency
+        :param boxes: array containing detected bounding boxes
+        :type boxes: np.ndarray"""
         boxes = boxes[:, [1, 0, 3, 2]]
         return boxes
 
-    def rescale_to_img_dims(self, boxes):
+    def rescale_to_img_dims(self, boxes: np.ndarray) -> np.ndarray:
         """Rescales detections to match the rescaled figure used in the main pipeline
         :param boxes: detectron2's detections
         :type boxes: np.ndarray
@@ -858,7 +862,7 @@ class Detectron2Adapter:
             boxes = boxes * self.fig.scaling_factor
         return boxes.astype(np.int32)
 
-    def combine_predictions(self, *preds):
+    def combine_predictions(self, *preds: 'Instances') -> 'Instances':
         """Combines predictions from the whole image, and small object detection from tiles
         :param preds: predictions from the whole image, and from image tiles
         :type preds: Instances
@@ -877,7 +881,8 @@ class Detectron2Adapter:
 
 
 class ImageTiler:
-    """Class used for creating, handling, and postrprocessing of image tiles"""
+    """Class used for creating, handling, and postrprocessing of image tiles.
+    The image is divided into several patches, which allow more precise detection of smaller objects"""
     def __init__(self, img, max_tile_dims, main_predictions, extension=100):
         self.img = img
         self.max_tile_dims = max_tile_dims
@@ -886,12 +891,11 @@ class ImageTiler:
         self.extension = extension
         self.tile_dims = []
 
-    def create_tiles(self):
+    def create_tiles(self) -> np.ndarray:
         """Creates image tiles.
-
         Splits image into segments of dims no larger than tile_dims by dividing it into NxM overlapping patches
         :return: image patches
-        :rtype: list[np.ndarray]"""
+        :rtype: np.ndarray"""
         h, w = self.img.shape[:2]
         tile_h, tile_w = self.max_tile_dims
         num_h_divisor_points = ceil(h / tile_h) + 1
@@ -899,7 +903,6 @@ class ImageTiler:
         h_segments = np.linspace(0, h, num_h_divisor_points, dtype=np.int32)
         w_segments = np.linspace(0, w, num_w_divisor_points, dtype=np.int32)
         h_segments = zip(h_segments[:-1], h_segments[1:])
-        # print(h_segments)
         w_segments = zip(w_segments[:-1], w_segments[1:])
         tiles_dims = product(h_segments, w_segments)
         tiles = []
@@ -925,7 +928,7 @@ class ImageTiler:
         tiles = [cv2.resize(t, (w_max, h_max)) for t in tiles]
         return np.stack(tiles, 0)
 
-    def filter_small_boxes(self, instances):
+    def filter_small_boxes(self, instances: 'Instances'):
         """Filters small predictions from image patch detections to add them to the main predictions
 
         :param instances: detections from images tiles
@@ -950,10 +953,10 @@ class ImageTiler:
         instances = self.create_detectron_instances(boxes, classes, scores)
         return instances
 
-    def transform_tile_predictions(self, preds):
+    def transform_tile_predictions(self, preds: List['Instances']):
         """Transforms coordinates of predictions from tile into the main image coordinate system
         :param preds: all predictions from image tiles
-        :type preds: list[np.ndarray]
+        :type preds: list[Instances]
         :return: transformed predictions packed into a single Instances object
         :rtype: Instances"""
         preds_transformed_boxes = []
@@ -997,6 +1000,7 @@ class ImageTiler:
 
 
 class Rde2Predictor(DefaultPredictor):
+    """Simple custom predictor class"""
     def __init__(self, cfg):
         super().__init__(cfg)
 

@@ -20,7 +20,6 @@ import logging
 import os
 
 from extractors.scheme_extractor import SchemeExtractor
-from extractors.arrows import ArrowClassifier
 from configs.config import Config
 
 MAIN_DIR = os.getcwd()
