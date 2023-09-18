@@ -130,36 +130,32 @@ class ArrowExtractor(BaseExtractor):
             ax.add_patch(rect_bbox)
             ax.text(panel.left, panel.top, label_text[arrow.__class__], c='b')
                 
-    def detect_arrows(self, arrows: List[BaseArrow])-> Tuple[List[BaseArrow]]:
-        """Arrow detection routine."""
+    def detect_arrows(self, panels: Tuple[List[Panel]])-> Tuple[List[BaseArrow]]:
+        """Detects all arrows in an image.
+        This method takes a tuple of two lists. The first list contains all single connected
+        components from the image. Additionally, a second list contains pairs of nearby connected
+        components to perform detection of equilibrium arrows.
+        The detection model is run separately on the two lists. From the detections on first list, all
+        positive (non-background) detections are selected, whereas from the second list's detections, 
+        only equilibrium arrow detections are selected.
+        :param panels: _description_
+        :type panels: Tuple[List[Panel]]
+        :return: _description_
+        :rtype: Tuple[List[BaseArrow]]
+        """
+        arrow_candidates, eq_arrow_candidates = panels
+        arrows_pred = self._detect_arrows(arrow_candidates)
+        arrows_eq_pred = self._detect_arrows(eq_arrow_candidates)
         
-        arrows, eq_arrows = arrows
-        idx_last_arrows = len(arrows)
-        all_arrows = arrows + eq_arrows
-        arrow_crops = [self.preprocess_model_input(arrow) for arrow in all_arrows]
-        arrow_crops = [np.concatenate(3*[x], axis=0) for x in arrow_crops]
-        arrow_crops = np.stack(arrow_crops, axis=0)
-        print(f'number of potential arrow crops: {len(arrow_crops)}')
-        BATCH_SIZE = 32
-        batches = np.arange(BATCH_SIZE, arrow_crops.shape[0], BATCH_SIZE)
-        arrow_crops = np.split(arrow_crops, batches)
-        arrows_pred = []
-        
-        with torch.no_grad():
-            for batch in arrow_crops:
-                _, out = self.arrow_detector(torch.tensor(batch))
-                arrows_pred.append(out.numpy())
-        arrows_pred = np.concatenate(arrows_pred, axis=0)
-        arrows_eq_pred = arrows_pred[idx_last_arrows:]
-        arrows_pred = arrows_pred[:idx_last_arrows]
-
         inliers = np.argmax(arrows_pred, -1)
         inliers = np.argwhere(inliers != 0).squeeze(1)
+        arrows = [arrow_candidates[idx] for idx in inliers]
         inliers_eq = np.argmax(arrows_eq_pred, -1)
         inliers_eq = np.argwhere(inliers_eq == 2).squeeze(1)
+        arrows_eq = [eq_arrow_candidates[idx] for idx in inliers_eq]
+
         arrow_classes = [arrows_pred[idx].argmax() for idx in inliers] + [2 for _ in range(len(inliers_eq))]
-        inliers = inliers.tolist() + (inliers_eq+idx_last_arrows).tolist()
-        arrows = [all_arrows[idx] for idx in inliers]
+        arrows = arrows + arrows_eq
 
         completed_arrows = []
         final_classes = []
@@ -170,7 +166,7 @@ class ArrowExtractor(BaseExtractor):
                 final_classes.append(cls_idx)
             except ValueError:
                 log.info("Arrow was not instantiated - failed on eroding an arrow into its hook")
-        self.fig.set_roles([a.panel for a in completed_arrows], FigureRoleEnum.ARROW)
+
         filtered_arrows = []
         equilibrium_arrows = [a for a in completed_arrows if isinstance(a, EquilibriumArrow)]
         for arrow in completed_arrows:
@@ -183,6 +179,23 @@ class ArrowExtractor(BaseExtractor):
                 
         self.fig.set_roles([a.panel for a in filtered_arrows], FigureRoleEnum.ARROW)
         return self.separate_arrows(filtered_arrows)
+
+    def _detect_arrows(self, panels):
+        crops = [self.preprocess_model_input(arrow) for arrow in panels]
+        crops = [np.concatenate(3*[x], axis=0) for x in crops]
+        crops = np.stack(crops, axis=0)
+        print(f'number of potential arrow crops: {len(crops)}')
+        BATCH_SIZE = 32
+        batches = np.arange(BATCH_SIZE, crops.shape[0], BATCH_SIZE)
+        crops = np.split(crops, batches)
+        arrows_pred = []
+        
+        with torch.no_grad():
+            for batch in crops:
+                _, out = self.arrow_detector(torch.tensor(batch))
+                arrows_pred.append(out.numpy())
+        arrows_pred = np.concatenate(arrows_pred, axis=0)
+        return arrows_pred
 
     def preprocess_model_input(self, panel: Panel) -> np.ndarray:
         """Converts a panel into image array and resizes it to the desired input shape as required by the arrow detection model.
