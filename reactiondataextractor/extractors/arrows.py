@@ -143,6 +143,7 @@ class ArrowExtractor(BaseExtractor):
         :return: _description_
         :rtype: Tuple[List[BaseArrow]]
         """
+        print(f'Detecting arrows...')
         arrow_candidates, eq_arrow_candidates = panels
         arrows_pred = self._detect_arrows(arrow_candidates)
         arrows_eq_pred = self._detect_arrows(eq_arrow_candidates)
@@ -184,7 +185,6 @@ class ArrowExtractor(BaseExtractor):
         crops = [self.preprocess_model_input(arrow) for arrow in panels]
         crops = [np.concatenate(3*[x], axis=0) for x in crops]
         crops = np.stack(crops, axis=0)
-        print(f'number of potential arrow crops: {len(crops)}')
         BATCH_SIZE = 32
         batches = np.arange(BATCH_SIZE, crops.shape[0], BATCH_SIZE)
         crops = np.split(crops, batches)

@@ -55,15 +55,15 @@ class DecimerRecogniser:
         img = efn.preprocess_input(img)
         return img
 
-    def detokenize_output(self, predicted_array: int) -> str:
+    def detokenize_output(self, predicted_array: 'Tensor') -> str:
         """
         This function takes the predited tokens from the DECIMER model
         and returns the decoded SMILES string.
-        :param predicted_array: Predicted tokens from DECIMER
-        :type predicted_array: int
+        :param predicted_array: Tensor of shape [1, n_tokens] of predicted tokens from DECIMER
+        :type predicted_array: Tensor
         :return: smiles representation of a diagram
         :rtype: str"""
-        outputs = [tokenizer.index_word[i] for i in predicted_array[0].numpy()]
+        outputs = [tokenizer.index_word[i] for i in tf.squeeze(predicted_array).numpy()]
         prediction = (
             "".join([str(elem) for elem in outputs])
             .replace("<start>", "")

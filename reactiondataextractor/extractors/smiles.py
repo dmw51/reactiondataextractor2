@@ -22,6 +22,7 @@ class SmilesExtractor(BaseExtractor):
 
     def extract(self) -> None:
         """This method is a wrapper method that call the OCSR engine"""
+        print('Running OCSR engine...')
         for diag in self.diagrams:
             self.vectoriser.diag = diag
             # self.vectoriser.create_vectorised_diagram_graph()

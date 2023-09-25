@@ -110,6 +110,7 @@ class UnifiedExtractor(BaseExtractor):
         :type report_raw_results: bool
         return: postprocessed diagrams, conditions, and labels
         rtype: tuple[list]"""
+        print('Running the main object detection model...')
         boxes, classes = self.model.detect()
 
         out_diag_boxes = [box for box, class_ in zip(boxes, classes) if self._class_dict[class_] == Diagram]
