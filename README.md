@@ -53,7 +53,7 @@ and replace the TESSDATA_PATH value inside reactiondataextractor/configs/config.
 # Getting Started
 
 This page gives a introduction on how to quickly get started with ReactionDataExtractor This assumes you already have
-ReactionDataExtractor and all dependencies [**installed**](install).
+ReactionDataExtractor and all dependencies installed.
 
 ## Extract from Images
 You can run ReactionDataExtractor using our command line interface by typing: 
