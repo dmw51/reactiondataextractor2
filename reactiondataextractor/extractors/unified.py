@@ -494,9 +494,6 @@ class UnifiedExtractor(BaseExtractor):
         for diag in diags:
             diag_dct = {'smiles': diag.smiles, 'panel': str(diag.panel.in_original_fig()),
                         'labels': [label.text for label in diag.labels]}
-            repeating_units = [{'identifier':fragment.label.text, 'smiles':fragment.smiles} for fragment in diag.repeating_units]
-            if repeating_units:
-                diag_dct['repeating_units'] = repeating_units
             out_lst.append(diag_dct)
         return json.dumps(out_lst, indent=4)
 
